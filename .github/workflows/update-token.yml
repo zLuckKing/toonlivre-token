@@ -17,7 +17,7 @@ jobs:
 
       - name: Install Playwright
         run: |
-          pip install playwright
+          pip install playwright playwright-stealth
           playwright install chromium
 
       - name: Capture token
@@ -26,35 +26,50 @@ jobs:
           import asyncio
           import json
           from playwright.async_api import async_playwright
+          from playwright_stealth import stealth_async
 
           async def main():
               async with async_playwright() as p:
-                  browser = await p.chromium.launch()
-                  context = await browser.new_context()
-                  
+                  browser = await p.chromium.launch(
+                      headless=True,
+                      args=[
+                          '--no-sandbox',
+                          '--disable-setuid-sandbox',
+                          '--disable-blink-features=AutomationControlled',
+                      ]
+                  )
+                  context = await browser.new_context(
+                      user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
+                      viewport={'width': 1280, 'height': 720},
+                  )
+
                   token = {"header": None, "value": None}
-                  
+
                   async def handle_request(request):
                       headers = request.headers
                       for key, value in headers.items():
                           if key.lower().startswith('x-tly') or key.lower().startswith('x-toon'):
                               token["header"] = key
                               token["value"] = value
-                  
+
                   page = await context.new_page()
+                  await stealth_async(page)
                   page.on("request", handle_request)
-                  
-                  await page.goto("https://toonlivre.net", wait_until="networkidle")
-                  await asyncio.sleep(5)
-                  
+
+                  try:
+                      await page.goto("https://toonlivre.net", wait_until="domcontentloaded", timeout=60000)
+                      await asyncio.sleep(10)
+                  except Exception as e:
+                      print(f"Error: {e}")
+
                   await browser.close()
-                  
+
                   if token["header"]:
                       with open("token.json", "w") as f:
                           json.dump(token, f)
                       print(f"Token captured: {token}")
                   else:
-                      print("Token not found!")
+                      print("Token not found, keeping existing token.json")
 
           asyncio.run(main())
           EOF
