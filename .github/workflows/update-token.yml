@@ -1,0 +1,68 @@
+name: Update Token
+
+on:
+  schedule:
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          playwright install chromium
+
+      - name: Capture token
+        run: |
+          python3 << 'EOF'
+          import asyncio
+          import json
+          from playwright.async_api import async_playwright
+
+          async def main():
+              async with async_playwright() as p:
+                  browser = await p.chromium.launch()
+                  context = await browser.new_context()
+                  
+                  token = {"header": None, "value": None}
+                  
+                  async def handle_request(request):
+                      headers = request.headers
+                      for key, value in headers.items():
+                          if key.lower().startswith('x-tly') or key.lower().startswith('x-toon'):
+                              token["header"] = key
+                              token["value"] = value
+                  
+                  page = await context.new_page()
+                  page.on("request", handle_request)
+                  
+                  await page.goto("https://toonlivre.net", wait_until="networkidle")
+                  await asyncio.sleep(5)
+                  
+                  await browser.close()
+                  
+                  if token["header"]:
+                      with open("token.json", "w") as f:
+                          json.dump(token, f)
+                      print(f"Token captured: {token}")
+                  else:
+                      print("Token not found!")
+
+          asyncio.run(main())
+          EOF
+
+      - name: Commit token
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add token.json
+          git diff --staged --quiet || git commit -m "Update token"
+          git push
