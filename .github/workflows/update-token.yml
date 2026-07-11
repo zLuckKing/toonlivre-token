@@ -25,9 +25,12 @@ jobs:
           python3 << 'EOF'
           import asyncio
           import json
+          import os
           from playwright.async_api import async_playwright
 
           async def main():
+              print("🚀 Iniciando captura do token de capítulo...")
+
               async with async_playwright() as p:
                   browser = await p.chromium.launch(
                       headless=True,
@@ -46,31 +49,131 @@ jobs:
                       }
                   )
 
-                  token = {"header": None, "value": None}
-
-                  async def handle_request(request):
-                      for key, value in request.headers.items():
-                          if key.lower().startswith('x-tly') or key.lower().startswith('x-toon'):
-                              token["header"] = key
-                              token["value"] = value
-
                   page = await context.new_page()
-                  page.on("request", handle_request)
 
-                  try:
-                      await page.goto("https://toonlivre.net", wait_until="domcontentloaded", timeout=60000)
-                      await asyncio.sleep(10)
-                  except Exception as e:
-                      print(f"Goto error: {e}")
+                  # Passo 1: buscar manga e capítulo via API
+                  manga_slug = None
+                  chapter_slug = None
+                  manga_id = None
+                  chapter_id = None
+
+                  async def handle_manga_response(response):
+                      nonlocal manga_slug, manga_id
+                      if '/api/mangas/search' in response.url and response.status == 200:
+                          try:
+                              data = await response.json()
+                              mangas = data.get('mangas', [])
+                              if mangas:
+                                  manga_slug = mangas[0].get('slug')
+                                  manga_id = mangas[0].get('id')
+                                  print(f"✓ Manga encontrado: {manga_slug}")
+                          except Exception as e:
+                              print(f"Erro ao parsear manga: {e}")
+
+                  page.on('response', handle_manga_response)
+                  print("📚 Acessando home...")
+                  await page.goto('https://toonlivre.net', wait_until='domcontentloaded', timeout=60000)
+                  await asyncio.sleep(5)
+                  page.remove_listener('response', handle_manga_response)
+
+                  if not manga_slug:
+                      print("❌ Manga não encontrado")
+                      await browser.close()
+                      return
+
+                  # Passo 2: buscar capítulo do manga
+                  async def handle_chapter_response(response):
+                      nonlocal chapter_slug, chapter_id, manga_id
+                      if f'/api/manga-by-slug/{manga_slug}' in response.url and response.status == 200:
+                          try:
+                              data = await response.json()
+                              chapters = data.get('chapters', [])
+                              if chapters:
+                                  chapter_slug = chapters[0].get('slug') or str(chapters[0].get('number', '1'))
+                                  chapter_id = chapters[0].get('id')
+                                  manga_id = data.get('id', manga_id)
+                                  print(f"✓ Capítulo encontrado: {chapter_slug} (id: {chapter_id})")
+                          except Exception as e:
+                              print(f"Erro ao parsear capítulo: {e}")
+
+                  page.on('response', handle_chapter_response)
+                  print(f"📖 Acessando manga {manga_slug}...")
+                  await page.goto(f'https://toonlivre.net/{manga_slug}', wait_until='domcontentloaded', timeout=60000)
+                  await asyncio.sleep(5)
+                  page.remove_listener('response', handle_chapter_response)
+
+                  if not chapter_id:
+                      print("❌ Capítulo não encontrado")
+                      await browser.close()
+                      return
+
+                  # Passo 3: acessar capítulo e capturar header da request de API
+                  captured_token = {"header": None, "value": None}
+                  chapter_api_ok = False
+
+                  async def handle_chapter_request(request):
+                      if f'/api/mangas/' in request.url and '/chapters/' in request.url:
+                          for key, value in request.headers.items():
+                              if key.lower().startswith('x-tly') or key.lower().startswith('x-toon'):
+                                  captured_token["header"] = key
+                                  captured_token["value"] = value
+                                  print(f"✓ Header encontrado: {key}")
+                                  print(f"✓ Valor: {value}")
+
+                  async def handle_chapter_api_response(response):
+                      nonlocal chapter_api_ok
+                      if f'/api/mangas/' in response.url and '/chapters/' in response.url:
+                          print(f"✓ API de capítulo respondeu: {response.status}")
+                          if response.status == 200:
+                              try:
+                                  data = await response.json()
+                                  if 'pages' in data and len(data['pages']) > 0:
+                                      print(f"✓ pages encontradas: {len(data['pages'])} páginas")
+                                      chapter_api_ok = True
+                                  else:
+                                      print("❌ pages não encontradas no JSON")
+                              except Exception as e:
+                                  print(f"Erro ao parsear páginas: {e}")
+                          else:
+                              print(f"❌ API retornou {response.status}")
+
+                  page.on('request', handle_chapter_request)
+                  page.on('response', handle_chapter_api_response)
+                  print(f"🔍 Acessando capítulo...")
+                  await page.goto(f'https://toonlivre.net/{manga_slug}/{chapter_slug}', wait_until='domcontentloaded', timeout=60000)
+                  await asyncio.sleep(8)
 
                   await browser.close()
 
-                  if token["header"]:
-                      with open("token.json", "w") as f:
-                          json.dump(token, f)
-                      print(f"Token captured: {token}")
-                  else:
-                      print("Token not found, keeping existing token.json")
+                  # Validações
+                  if not captured_token["header"]:
+                      print("❌ Header não capturado")
+                      return
+
+                  if not chapter_api_ok:
+                      print("❌ API de capítulo não validada — não fazendo commit")
+                      return
+
+                  # Compara com token atual
+                  current_token = {}
+                  if os.path.exists('token.json'):
+                      with open('token.json', 'r') as f:
+                          try:
+                              current_token = json.load(f)
+                          except:
+                              pass
+
+                  if (current_token.get('header') == captured_token["header"] and
+                          current_token.get('value') == captured_token["value"]):
+                      print("✓ Token não mudou. Nada para atualizar.")
+                      return
+
+                  # Salva novo token
+                  with open('token.json', 'w') as f:
+                      json.dump(captured_token, f)
+                  print(f"✓ Token alterado!")
+                  print(f"  Anterior: {current_token}")
+                  print(f"  Novo: {captured_token}")
 
           asyncio.run(main())
           EOF
@@ -80,5 +183,5 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add token.json
-          git diff --staged --quiet || git commit -m "Update token"
+          git diff --staged --quiet || git commit -m "chore: update token $(date +'%Y-%m-%d %H:%M')"
           git push
