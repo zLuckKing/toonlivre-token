@@ -87,11 +87,21 @@ jobs:
 
                   try:
                       # Passa pela home primeiro para o Cloudflare reconhecer
+                      print("🏠 Acessando home...")
                       await page.goto('https://toonlivre.net', wait_until='domcontentloaded', timeout=60000)
-                      await asyncio.sleep(8)
-                      # Agora acessa o capítulo
+                      await asyncio.sleep(15)
+
+                      # Acessa o capítulo
+                      print("📖 Acessando capítulo...")
                       await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
-                      await asyncio.sleep(20)
+                      await asyncio.sleep(15)
+
+                      # Se não capturou, tenta recarregar
+                      if not captured_token["header"]:
+                          print("🔄 Header não capturado, recarregando...")
+                          await page.reload(wait_until='domcontentloaded', timeout=60000)
+                          await asyncio.sleep(15)
+
                   except Exception as e:
                       print(f"Erro ao acessar página: {e}")
 
