@@ -57,6 +57,7 @@ jobs:
                   chapter_api_ok = False
 
                   async def handle_request(request):
+                      print(f"REQUEST: {request.url[:80]}")
                       if '/api/mangas/' in request.url and '/chapters/' in request.url:
                           for key, value in request.headers.items():
                               if key.lower().startswith('x-tly') or key.lower().startswith('x-toon'):
@@ -67,6 +68,7 @@ jobs:
 
                   async def handle_response(response):
                       nonlocal chapter_api_ok
+                      print(f"RESPONSE: {response.status} {response.url[:80]}")
                       if '/api/mangas/' in response.url and '/chapters/' in response.url:
                           print(f"✓ API de capítulo respondeu: {response.status}")
                           if response.status == 200:
@@ -86,17 +88,14 @@ jobs:
                   page.on('response', handle_response)
 
                   try:
-                      # Passa pela home primeiro para o Cloudflare reconhecer
                       print("🏠 Acessando home...")
                       await page.goto('https://toonlivre.net', wait_until='domcontentloaded', timeout=60000)
                       await asyncio.sleep(15)
 
-                      # Acessa o capítulo
                       print("📖 Acessando capítulo...")
                       await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
                       await asyncio.sleep(15)
 
-                      # Se não capturou, tenta recarregar
                       if not captured_token["header"]:
                           print("🔄 Header não capturado, recarregando...")
                           await page.reload(wait_until='domcontentloaded', timeout=60000)
@@ -107,7 +106,6 @@ jobs:
 
                   await browser.close()
 
-                  # Validações
                   if not captured_token["header"]:
                       print("❌ Header não capturado — não fazendo commit")
                       return
@@ -116,7 +114,6 @@ jobs:
                       print("❌ API de capítulo não validada — não fazendo commit")
                       return
 
-                  # Compara com token atual
                   current_token = {}
                   if os.path.exists('token.json'):
                       with open('token.json', 'r') as f:
@@ -130,7 +127,6 @@ jobs:
                       print("✓ Token não mudou. Nada para atualizar.")
                       return
 
-                  # Salva novo token
                   with open('token.json', 'w') as f:
                       json.dump(captured_token, f)
                   print(f"✓ Token alterado!")
