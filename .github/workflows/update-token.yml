@@ -15,14 +15,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Playwright
+      - name: Install dependencies
         run: |
+          sudo apt-get install -y xvfb
           pip install playwright
           playwright install chromium
 
       - name: Capture token
         run: |
-          python3 << 'EOF'
+          xvfb-run --auto-servernum python3 << 'EOF'
           import asyncio
           import json
           import os
@@ -36,12 +37,13 @@ jobs:
 
               async with async_playwright() as p:
                   browser = await p.chromium.launch(
-                      headless=True,
+                      headless=False,
                       args=[
                           '--no-sandbox',
                           '--disable-setuid-sandbox',
-                          '--disable-blink-features=AutomationControlled',
                           '--disable-dev-shm-usage',
+                          '--disable-blink-features=AutomationControlled',
+                          '--window-size=1280,720',
                       ]
                   )
                   context = await browser.new_context(
@@ -57,8 +59,8 @@ jobs:
                   chapter_api_ok = False
 
                   async def handle_request(request):
-                      print(f"REQUEST: {request.url[:80]}")
                       if '/api/mangas/' in request.url and '/chapters/' in request.url:
+                          print(f"📡 Request capítulo: {request.url[:80]}")
                           for key, value in request.headers.items():
                               if key.lower().startswith('x-tly') or key.lower().startswith('x-toon'):
                                   captured_token["header"] = key
@@ -68,7 +70,6 @@ jobs:
 
                   async def handle_response(response):
                       nonlocal chapter_api_ok
-                      print(f"RESPONSE: {response.status} {response.url[:80]}")
                       if '/api/mangas/' in response.url and '/chapters/' in response.url:
                           print(f"✓ API de capítulo respondeu: {response.status}")
                           if response.status == 200:
@@ -94,15 +95,15 @@ jobs:
 
                       print("📖 Acessando capítulo...")
                       await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
-                      await asyncio.sleep(15)
+                      await asyncio.sleep(20)
 
                       if not captured_token["header"]:
-                          print("🔄 Header não capturado, recarregando...")
+                          print("🔄 Recarregando...")
                           await page.reload(wait_until='domcontentloaded', timeout=60000)
-                          await asyncio.sleep(15)
+                          await asyncio.sleep(20)
 
                   except Exception as e:
-                      print(f"Erro ao acessar página: {e}")
+                      print(f"Erro: {e}")
 
                   await browser.close()
 
