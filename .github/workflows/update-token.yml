@@ -28,8 +28,11 @@ jobs:
           import os
           from playwright.async_api import async_playwright
 
+          CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
+
           async def main():
               print("🚀 Iniciando captura do token de capítulo...")
+              print(f"📖 URL: {CHAPTER_URL}")
 
               async with async_playwright() as p:
                   browser = await p.chromium.launch(
@@ -50,69 +53,11 @@ jobs:
                   )
 
                   page = await context.new_page()
-
-                  # Passo 1: buscar manga e capítulo via API
-                  manga_slug = None
-                  chapter_slug = None
-                  manga_id = None
-                  chapter_id = None
-
-                  async def handle_manga_response(response):
-                      nonlocal manga_slug, manga_id
-                      if '/api/mangas/search' in response.url and response.status == 200:
-                          try:
-                              data = await response.json()
-                              mangas = data.get('mangas', [])
-                              if mangas:
-                                  manga_slug = mangas[0].get('slug')
-                                  manga_id = mangas[0].get('id')
-                                  print(f"✓ Manga encontrado: {manga_slug}")
-                          except Exception as e:
-                              print(f"Erro ao parsear manga: {e}")
-
-                  page.on('response', handle_manga_response)
-                  print("📚 Acessando home...")
-                  await page.goto('https://toonlivre.net', wait_until='domcontentloaded', timeout=60000)
-                  await asyncio.sleep(5)
-                  page.remove_listener('response', handle_manga_response)
-
-                  if not manga_slug:
-                      print("❌ Manga não encontrado")
-                      await browser.close()
-                      return
-
-                  # Passo 2: buscar capítulo do manga
-                  async def handle_chapter_response(response):
-                      nonlocal chapter_slug, chapter_id, manga_id
-                      if f'/api/manga-by-slug/{manga_slug}' in response.url and response.status == 200:
-                          try:
-                              data = await response.json()
-                              chapters = data.get('chapters', [])
-                              if chapters:
-                                  chapter_slug = chapters[0].get('slug') or str(chapters[0].get('number', '1'))
-                                  chapter_id = chapters[0].get('id')
-                                  manga_id = data.get('id', manga_id)
-                                  print(f"✓ Capítulo encontrado: {chapter_slug} (id: {chapter_id})")
-                          except Exception as e:
-                              print(f"Erro ao parsear capítulo: {e}")
-
-                  page.on('response', handle_chapter_response)
-                  print(f"📖 Acessando manga {manga_slug}...")
-                  await page.goto(f'https://toonlivre.net/{manga_slug}', wait_until='domcontentloaded', timeout=60000)
-                  await asyncio.sleep(5)
-                  page.remove_listener('response', handle_chapter_response)
-
-                  if not chapter_id:
-                      print("❌ Capítulo não encontrado")
-                      await browser.close()
-                      return
-
-                  # Passo 3: acessar capítulo e capturar header da request de API
                   captured_token = {"header": None, "value": None}
                   chapter_api_ok = False
 
-                  async def handle_chapter_request(request):
-                      if f'/api/mangas/' in request.url and '/chapters/' in request.url:
+                  async def handle_request(request):
+                      if '/api/mangas/' in request.url and '/chapters/' in request.url:
                           for key, value in request.headers.items():
                               if key.lower().startswith('x-tly') or key.lower().startswith('x-toon'):
                                   captured_token["header"] = key
@@ -120,9 +65,9 @@ jobs:
                                   print(f"✓ Header encontrado: {key}")
                                   print(f"✓ Valor: {value}")
 
-                  async def handle_chapter_api_response(response):
+                  async def handle_response(response):
                       nonlocal chapter_api_ok
-                      if f'/api/mangas/' in response.url and '/chapters/' in response.url:
+                      if '/api/mangas/' in response.url and '/chapters/' in response.url:
                           print(f"✓ API de capítulo respondeu: {response.status}")
                           if response.status == 200:
                               try:
@@ -137,17 +82,20 @@ jobs:
                           else:
                               print(f"❌ API retornou {response.status}")
 
-                  page.on('request', handle_chapter_request)
-                  page.on('response', handle_chapter_api_response)
-                  print(f"🔍 Acessando capítulo...")
-                  await page.goto(f'https://toonlivre.net/{manga_slug}/{chapter_slug}', wait_until='domcontentloaded', timeout=60000)
-                  await asyncio.sleep(8)
+                  page.on('request', handle_request)
+                  page.on('response', handle_response)
+
+                  try:
+                      await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
+                      await asyncio.sleep(10)
+                  except Exception as e:
+                      print(f"Erro ao acessar página: {e}")
 
                   await browser.close()
 
                   # Validações
                   if not captured_token["header"]:
-                      print("❌ Header não capturado")
+                      print("❌ Header não capturado — não fazendo commit")
                       return
 
                   if not chapter_api_ok:
