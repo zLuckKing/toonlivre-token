@@ -31,6 +31,15 @@ jobs:
 
           CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
 
+          STANDARD_HEADERS = {
+              'accept', 'accept-encoding', 'accept-language', 'connection',
+              'content-type', 'host', 'origin', 'referer', 'user-agent',
+              'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
+              'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site',
+              'prefers-color-scheme', 'cache-control', 'pragma',
+              'if-none-match', 'if-modified-since', 'cookie',
+          }
+
           async def main():
               print("🚀 Iniciando captura do token de capítulo...")
               print(f"📖 URL: {CHAPTER_URL}")
@@ -62,7 +71,7 @@ jobs:
                       if '/api/mangas/' in request.url and '/chapters/' in request.url:
                           print(f"📡 Request capítulo: {request.url[:80]}")
                           for key, value in request.headers.items():
-                              if key.lower().startswith('x-tly') or key.lower().startswith('x-toon') or key.lower().startswith('toonlivre'):
+                              if key.lower() not in STANDARD_HEADERS:
                                   captured_token["header"] = key
                                   captured_token["value"] = value
                                   print(f"✓ Header encontrado: {key}")
