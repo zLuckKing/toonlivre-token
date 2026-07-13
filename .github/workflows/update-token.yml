@@ -62,7 +62,7 @@ jobs:
                       if '/api/mangas/' in request.url and '/chapters/' in request.url:
                           print(f"📡 Request capítulo: {request.url[:80]}")
                           for key, value in request.headers.items():
-                              if key.lower().startswith('x-tly') or key.lower().startswith('x-toon'):
+                              if key.lower().startswith('x-tly') or key.lower().startswith('x-toon') or key.lower().startswith('toonlivre'):
                                   captured_token["header"] = key
                                   captured_token["value"] = value
                                   print(f"✓ Header encontrado: {key}")
