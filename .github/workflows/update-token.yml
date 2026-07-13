@@ -84,25 +84,7 @@ jobs:
                           else:
                               print("⚠️ Nenhum header customizado nessa request")
 
-                  async def handle_response(response):
-                      nonlocal chapter_api_ok
-                      if is_chapter_api(response.url):
-                          print(f"✓ API de capítulo respondeu: {response.status}")
-                          if response.status == 200:
-                              try:
-                                  data = await response.json()
-                                  if 'pages' in data and len(data['pages']) > 0:
-                                      print(f"✓ pages encontradas: {len(data['pages'])} páginas")
-                                      chapter_api_ok = True
-                                  else:
-                                      print("❌ pages não encontradas no JSON")
-                              except Exception as e:
-                                  print(f"Erro ao parsear páginas: {e}")
-                          else:
-                              print(f"❌ API retornou {response.status}")
-
                   page.on('request', handle_request)
-                  page.on('response', handle_response)
 
                   try:
                       print("🏠 Acessando home...")
@@ -110,6 +92,8 @@ jobs:
                   except Exception:
                       pass
 
+                  # Tenta capturar a response da API do capítulo
+                  chapter_response = None
                   try:
                       print("📖 Acessando capítulo...")
                       async with page.expect_response(
@@ -117,8 +101,8 @@ jobs:
                           timeout=45000
                       ) as response_info:
                           await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
-                      await response_info.value
-                      print("✓ Response da API capturada via evento")
+                      chapter_response = await response_info.value
+                      print(f"✓ API respondeu: {chapter_response.status}")
                   except Exception as e:
                       print(f"⚠️ Primeira tentativa falhou: {e}")
                       try:
@@ -128,10 +112,24 @@ jobs:
                               timeout=45000
                           ) as response_info:
                               await page.reload(wait_until='domcontentloaded', timeout=60000)
-                          await response_info.value
-                          print("✓ Response da API capturada após reload")
+                          chapter_response = await response_info.value
+                          print(f"✓ API respondeu após reload: {chapter_response.status}")
                       except Exception as e2:
                           print(f"❌ Falhou após reload: {e2}")
+
+                  # Parseia o JSON enquanto o browser ainda tá aberto
+                  if chapter_response and chapter_response.status == 200:
+                      try:
+                          data = await chapter_response.json()
+                          if 'pages' in data and len(data['pages']) > 0:
+                              print(f"✓ pages encontradas: {len(data['pages'])} páginas")
+                              chapter_api_ok = True
+                          else:
+                              print("❌ pages não encontradas no JSON")
+                      except Exception as e:
+                          print(f"Erro ao parsear páginas: {e}")
+                  elif chapter_response:
+                      print(f"❌ API retornou {chapter_response.status}")
 
                   await browser.close()
 
