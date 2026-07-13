@@ -64,18 +64,22 @@ jobs:
                   )
 
                   page = await context.new_page()
-                  captured_token = {"header": None, "value": None}
+                  custom_headers_found = {}
                   chapter_api_ok = False
 
                   async def handle_request(request):
                       if '/api/mangas/' in request.url and '/chapters/' in request.url:
                           print(f"📡 Request capítulo: {request.url[:80]}")
-                          for key, value in request.headers.items():
-                              if key.lower() not in STANDARD_HEADERS:
-                                  captured_token["header"] = key
-                                  captured_token["value"] = value
-                                  print(f"✓ Header encontrado: {key}")
-                                  print(f"✓ Valor: {value}")
+                          candidates = {
+                              key: value
+                              for key, value in request.headers.items()
+                              if key.lower() not in STANDARD_HEADERS
+                          }
+                          if candidates:
+                              print(f"📋 Headers customizados encontrados: {list(candidates.keys())}")
+                              custom_headers_found.update(candidates)
+                          else:
+                              print("⚠️ Nenhum header customizado encontrado nessa request")
 
                   async def handle_response(response):
                       nonlocal chapter_api_ok
@@ -100,30 +104,63 @@ jobs:
                   try:
                       print("🏠 Acessando home...")
                       await page.goto('https://toonlivre.net', wait_until='domcontentloaded', timeout=60000)
-                      await asyncio.sleep(15)
+
+                      # Espera a home carregar completamente via evento
+                      try:
+                          await page.wait_for_load_state('networkidle', timeout=15000)
+                      except:
+                          pass
 
                       print("📖 Acessando capítulo...")
                       await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
-                      await asyncio.sleep(20)
 
-                      if not captured_token["header"]:
-                          print("🔄 Recarregando...")
+                      # Espera especificamente a response da API do capítulo
+                      try:
+                          await page.wait_for_response(
+                              lambda r: '/api/mangas/' in r.url and '/chapters/' in r.url,
+                              timeout=30000
+                          )
+                          print("✓ Response da API capturada via evento")
+                      except Exception as e:
+                          print(f"⚠️ Timeout aguardando API, tentando reload: {e}")
                           await page.reload(wait_until='domcontentloaded', timeout=60000)
-                          await asyncio.sleep(20)
+                          try:
+                              await page.wait_for_response(
+                                  lambda r: '/api/mangas/' in r.url and '/chapters/' in r.url,
+                                  timeout=30000
+                              )
+                              print("✓ Response da API capturada após reload")
+                          except Exception as e2:
+                              print(f"❌ Falhou após reload: {e2}")
 
                   except Exception as e:
                       print(f"Erro: {e}")
 
                   await browser.close()
 
-                  if not captured_token["header"]:
-                      print("❌ Header não capturado — não fazendo commit")
-                      return
-
+                  # Validações
                   if not chapter_api_ok:
                       print("❌ API de capítulo não validada — não fazendo commit")
                       return
 
+                  print(f"\n📋 Todos os headers customizados capturados: {custom_headers_found}")
+
+                  if len(custom_headers_found) == 0:
+                      print("❌ Nenhum header customizado encontrado — não fazendo commit")
+                      return
+
+                  if len(custom_headers_found) > 1:
+                      print(f"⚠️ Mais de um header customizado encontrado: {list(custom_headers_found.keys())}")
+                      print("❌ Ambíguo — não fazendo commit para evitar gravar header errado")
+                      return
+
+                  # Exatamente um header customizado — seguro para commitar
+                  header_name = list(custom_headers_found.keys())[0]
+                  header_value = custom_headers_found[header_name]
+                  captured_token = {"header": header_name, "value": header_value}
+                  print(f"✓ Header único confirmado: {header_name}: {header_value}")
+
+                  # Compara com token atual
                   current_token = {}
                   if os.path.exists('token.json'):
                       with open('token.json', 'r') as f:
