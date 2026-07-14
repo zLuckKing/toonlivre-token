@@ -1,4 +1,4 @@
-name: Update Token (debug mode)
+name: Update Token (debug + API test)
 
 on:
   schedule:
@@ -22,7 +22,7 @@ jobs:
           python -c "from importlib.metadata import version; print('Playwright version:', version('playwright'))"
           playwright install chromium
 
-      - name: Debug & capture cookies (polling + Set-Cookie log)
+      - name: Debug & capture cookies + API test
         run: |
           xvfb-run --auto-servernum python3 << 'EOF'
           import asyncio
@@ -31,9 +31,11 @@ jobs:
           from playwright.async_api import async_playwright
 
           CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
+          # URL direta da API de capítulo (extraída da página)
+          API_CHAPTER_URL = "https://toonlivre.net/api/mangas/obra-d32eb564/chapters/cap-a064a237-40"
 
           async def main():
-              print("🚀 Modo debug: polling de cookies + log de Set-Cookie")
+              print("🚀 Modo debug: capturando cookies + teste da API de capítulo")
               async with async_playwright() as p:
                   browser = await p.chromium.launch(
                       headless=False,
@@ -54,10 +56,8 @@ jobs:
                   )
                   page = await context.new_page()
 
-                  # Log de todas as requisições
+                  # Log de requisições e respostas
                   page.on('request', lambda req: print(f"REQ: {req.method} {req.url}"))
-
-                  # Log de respostas, com destaque ABSOLUTO para Set-Cookie
                   async def log_response(response):
                       print(f"RES: {response.status} {response.url}")
                       if 'set-cookie' in response.headers:
@@ -85,20 +85,10 @@ jobs:
 
                           await asyncio.sleep(1)
 
-                      if tl_cpass_found:
-                          # Extrai os dois cookies desejados
-                          cookie_dict = {
-                              c["name"]: c["value"]
-                              for c in cookies
-                              if c["name"] in ("tl_cpass", "cf_clearance")
-                          }
-                          print(f"Cookies capturados: {json.dumps(cookie_dict, indent=2)}")
-                          with open("token.json", "w") as f:
-                              json.dump(cookie_dict, f, indent=2)
-                          print("✓ token.json salvo com sucesso")
-                      else:
+                      # Se ainda não encontrou, talvez tenha falhado
+                      if not tl_cpass_found:
                           print("❌ tl_cpass não apareceu após 30 segundos de polling")
-                          # Ainda tentamos salvar se cf_clearance existir (não deve ser o caso)
+                          # Ainda tenta salvar cf_clearance se existir
                           cookies = await context.cookies()
                           cookie_dict = {
                               c["name"]: c["value"]
@@ -109,6 +99,29 @@ jobs:
                               with open("token.json", "w") as f:
                                   json.dump(cookie_dict, f, indent=2)
                               print("Apenas cf_clearance encontrado (tl_cpass ausente)")
+                      else:
+                          cookies = await context.cookies()
+                          cookie_dict = {
+                              c["name"]: c["value"]
+                              for c in cookies
+                              if c["name"] in ("tl_cpass", "cf_clearance")
+                          }
+                          print(f"Cookies capturados: {json.dumps(cookie_dict, indent=2)}")
+                          with open("token.json", "w") as f:
+                              json.dump(cookie_dict, f, indent=2)
+                          print("✓ token.json salvo")
+
+                          # ---- TESTE DA API USANDO O MESMO CONTEXTO ----
+                          print("\n🧪 Testando API de capítulo com os cookies atuais...")
+                          api_response = await context.request.get(API_CHAPTER_URL)
+                          print(f"Status: {api_response.status}")
+                          body_text = await api_response.text()
+                          print(f"Body (primeiros 500 chars): {body_text[:500]}")
+
+                          if api_response.status == 200:
+                              print("✅ API respondeu 200! Cookies são suficientes!")
+                          else:
+                              print("❌ API não respondeu 200 – faltam headers ou outros fatores")
 
                   except Exception as e:
                       print(f"⚠️ Erro durante navegação: {e}")
