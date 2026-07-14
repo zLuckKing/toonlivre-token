@@ -59,6 +59,17 @@ jobs:
                   )
                   page = await context.new_page()
 
+                  # Handler para REQUESTS do chapter-pass
+                  async def handle_request(request):
+                      if "/api/chapter-pass" in request.url:
+                          print("=== REQUEST (chapter-pass) ===")
+                          try:
+                              post_data = request.post_data
+                              print(post_data)
+                          except Exception as e:
+                              print(f"Erro ao obter post_data: {e}")
+
+                  # Handler para RESPONSES (já existente, mas ampliado)
                   async def handle_response(response):
                       nonlocal chapter_ok
                       if is_chapter_api(response.url):
@@ -76,6 +87,19 @@ jobs:
                           else:
                               print(f"❌ API retornou {response.status}")
 
+                      # NOVO: log para response do chapter-pass
+                      if "/api/chapter-pass" in response.url:
+                          print("=== RESPONSE (chapter-pass) ===")
+                          try:
+                              body_text = await response.text()
+                              print(body_text)
+                          except Exception as e:
+                              print(f"Erro ao ler body: {e}")
+                          print("Headers:")
+                          for key, value in response.headers.items():
+                              print(f"  {key}: {value}")
+
+                  page.on('request', handle_request)
                   page.on('response', handle_response)
 
                   # Tenta acessar o capítulo com espera explícita pela API
