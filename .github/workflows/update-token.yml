@@ -22,7 +22,7 @@ jobs:
           python -c "from importlib.metadata import version; print('Playwright version:', version('playwright'))"
           playwright install chromium
 
-      - name: Capture session state
+      - name: Capture chapter-pass details
         run: |
           xvfb-run --auto-servernum python3 << 'EOF'
           import asyncio
@@ -31,12 +31,16 @@ jobs:
           from playwright.async_api import async_playwright
 
           CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
+          collected_info = {
+              "requests": [],
+              "responses": []
+          }
 
           def is_chapter_api(url):
               return '/api/mangas/' in url and '/chapters/' in url
 
           async def main():
-              print("🚀 Iniciando captura do storage state...")
+              print("🚀 Iniciando captura das interações com /api/chapter-pass...")
               chapter_ok = False
 
               async with async_playwright() as p:
@@ -59,17 +63,19 @@ jobs:
                   )
                   page = await context.new_page()
 
-                  # Handler para REQUESTS do chapter-pass
                   async def handle_request(request):
                       if "/api/chapter-pass" in request.url:
-                          print("=== REQUEST (chapter-pass) ===")
-                          try:
-                              post_data = request.post_data
-                              print(post_data)
-                          except Exception as e:
-                              print(f"Erro ao obter post_data: {e}")
+                          print("\n=== REQUEST chapter-pass ===")
+                          print("URL:", request.url)
+                          print("Headers:", dict(request.headers))
+                          body = request.post_data
+                          print("Body:", body)
+                          collected_info["requests"].append({
+                              "url": request.url,
+                              "headers": dict(request.headers),
+                              "body": body
+                          })
 
-                  # Handler para RESPONSES (já existente, mas ampliado)
                   async def handle_response(response):
                       nonlocal chapter_ok
                       if is_chapter_api(response.url):
@@ -87,17 +93,21 @@ jobs:
                           else:
                               print(f"❌ API retornou {response.status}")
 
-                      # NOVO: log para response do chapter-pass
                       if "/api/chapter-pass" in response.url:
-                          print("=== RESPONSE (chapter-pass) ===")
+                          print("\n=== RESPONSE chapter-pass ===")
+                          print("Status:", response.status)
+                          print("Headers:", dict(response.headers))
                           try:
                               body_text = await response.text()
-                              print(body_text)
+                              print("Body:", body_text)
                           except Exception as e:
-                              print(f"Erro ao ler body: {e}")
-                          print("Headers:")
-                          for key, value in response.headers.items():
-                              print(f"  {key}: {value}")
+                              body_text = f"Erro ao ler body: {e}"
+                              print(body_text)
+                          collected_info["responses"].append({
+                              "status": response.status,
+                              "headers": dict(response.headers),
+                              "body": body_text
+                          })
 
                   page.on('request', handle_request)
                   page.on('response', handle_response)
@@ -136,22 +146,12 @@ jobs:
                       print("Screenshot salvo como failure.png")
                       sys.exit(1)
 
-                  # Captura storage_state (após confirmação e sleep)
-                  storage_state = await context.storage_state()
-                  print("🍪 Storage state capturado com sucesso!")
-                  print("Cookies:")
-                  for cookie in storage_state["cookies"]:
-                      print(f"  - {cookie['name']} ({cookie['domain']})")
-                  print()
-                  print("Origins:")
-                  for origin in storage_state["origins"]:
-                      print(f"  {origin['origin']}")
-
                   await browser.close()
 
-                  with open("storage_state.json", "w") as f:
-                      json.dump(storage_state, f, indent=2)
-                  print("✓ Storage State salvo em storage_state.json")
+                  # Salva todas as informações coletadas
+                  with open("chapter_pass_info.json", "w") as f:
+                      json.dump(collected_info, f, indent=2)
+                  print("\n✓ Interações com chapter-pass salvas em chapter_pass_info.json")
 
           asyncio.run(main())
           EOF
@@ -163,10 +163,16 @@ jobs:
           name: failure-screenshot
           path: failure.png
 
-      - name: Commit storage state
+      - name: Upload chapter-pass info (optional)
+        uses: actions/upload-artifact@v4
+        with:
+          name: chapter-pass-info
+          path: chapter_pass_info.json
+
+      - name: Commit chapter-pass info
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add storage_state.json
-          git diff --staged --quiet || git commit -m "chore: update storage state $(date +'%Y-%m-%d %H:%M')"
+          git add chapter_pass_info.json
+          git diff --staged --quiet || git commit -m "chore: update chapter-pass info $(date +'%Y-%m-%d %H:%M')"
           git push
