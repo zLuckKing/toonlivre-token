@@ -43,9 +43,11 @@ jobs:
           def is_chapter_api(url):
               return '/api/mangas/' in url and '/chapters/' in url
 
+          def is_chapter_pass(url):
+              return '/api/chapter-pass' in url
+
           async def main():
               print("🚀 Iniciando captura do token de capítulo...")
-              print(f"📖 URL: {CHAPTER_URL}")
 
               async with async_playwright() as p:
                   browser = await p.chromium.launch(
@@ -69,6 +71,7 @@ jobs:
                   page = await context.new_page()
                   custom_headers_found = {}
                   chapter_api_ok = False
+                  chapter_pass_token = None
 
                   async def handle_request(request):
                       if is_chapter_api(request.url):
@@ -84,7 +87,38 @@ jobs:
                           else:
                               print("⚠️ Nenhum header customizado nessa request")
 
+                      if is_chapter_pass(request.url):
+                          print(f"🔑 Request chapter-pass detectada!")
+                          try:
+                              body = request.post_data
+                              if body:
+                                  data = json.loads(body)
+                                  print(f"🔑 turnstileToken: {data.get('turnstileToken', '')[:50]}...")
+                          except Exception as e:
+                              print(f"Erro ao ler body do chapter-pass: {e}")
+
+                  async def handle_response(response):
+                      nonlocal chapter_api_ok, chapter_pass_token
+                      if is_chapter_pass(response.url) and response.status == 200:
+                          print(f"✓ chapter-pass respondeu 200")
+
+                      if is_chapter_api(response.url):
+                          print(f"✓ API de capítulo respondeu: {response.status}")
+                          if response.status == 200:
+                              try:
+                                  data = await response.json()
+                                  if 'pages' in data and len(data['pages']) > 0:
+                                      print(f"✓ pages encontradas: {len(data['pages'])} páginas")
+                                      chapter_api_ok = True
+                                  else:
+                                      print("❌ pages não encontradas no JSON")
+                              except Exception as e:
+                                  print(f"Erro ao parsear páginas: {e}")
+                          else:
+                              print(f"❌ API retornou {response.status}")
+
                   page.on('request', handle_request)
+                  page.on('response', handle_response)
 
                   try:
                       print("🏠 Acessando home...")
@@ -97,9 +131,11 @@ jobs:
                       print("📖 Acessando capítulo...")
                       async with page.expect_response(
                           lambda r: is_chapter_api(r.url),
-                          timeout=45000
+                          timeout=60000
                       ) as response_info:
                           await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
+                          # Aguarda o fluxo completo: 403 → chapter-pass → 200
+                          await asyncio.sleep(15)
                       chapter_response = await response_info.value
                       print(f"✓ API respondeu: {chapter_response.status}")
                   except Exception as e:
@@ -108,9 +144,10 @@ jobs:
                           print("🔄 Recarregando...")
                           async with page.expect_response(
                               lambda r: is_chapter_api(r.url),
-                              timeout=45000
+                              timeout=60000
                           ) as response_info:
                               await page.reload(wait_until='domcontentloaded', timeout=60000)
+                              await asyncio.sleep(15)
                           chapter_response = await response_info.value
                           print(f"✓ API respondeu após reload: {chapter_response.status}")
                       except Exception as e2:
@@ -128,11 +165,6 @@ jobs:
                           print(f"Erro ao parsear páginas: {e}")
                   elif chapter_response:
                       print(f"❌ API retornou {chapter_response.status}")
-
-                  print("\n🍪 Cookies da sessão:")
-                  print(await context.cookies())
-                  print("\n📦 Storage state:")
-                  print(await context.storage_state())
 
                   await browser.close()
 
