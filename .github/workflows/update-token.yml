@@ -22,7 +22,7 @@ jobs:
           python -c "from importlib.metadata import version; print('Playwright version:', version('playwright'))"
           playwright install chromium
 
-      - name: Capture all network activity
+      - name: Capture tl_cpass cookie
         run: |
           xvfb-run --auto-servernum python3 << 'EOF'
           import asyncio
@@ -31,15 +31,9 @@ jobs:
           from playwright.async_api import async_playwright
 
           CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
-          all_requests = []
-          all_responses = []
-
-          def is_chapter_api(url):
-              return '/api/mangas/' in url and '/chapters/' in url
 
           async def main():
-              print("🚀 Capturando todas as requisições/respostas relevantes...")
-              chapter_ok = False
+              print("🚀 Iniciando captura do cookie tl_cpass...")
 
               async with async_playwright() as p:
                   browser = await p.chromium.launch(
@@ -61,95 +55,46 @@ jobs:
                   )
                   page = await context.new_page()
 
-                  async def handle_request(request):
-                      if "toonlivre.net" in request.url or "challenges.cloudflare.com" in request.url:
-                          print(f"\nREQUEST: {request.method} {request.url}")
-                          req_data = {
-                              "method": request.method,
-                              "url": request.url,
-                              "headers": dict(request.headers),
-                              "body": request.post_data
-                          }
-                          all_requests.append(req_data)
-
-                  async def handle_response(response):
-                      nonlocal chapter_ok
-                      if is_chapter_api(response.url):
-                          print(f"✓ API de capítulo respondeu: {response.status}")
-                          if response.status == 200:
-                              try:
-                                  data = await response.json()
-                                  if 'pages' in data and len(data['pages']) > 0:
-                                      print(f"✓ pages encontradas: {len(data['pages'])} páginas")
-                                      chapter_ok = True
-                                  else:
-                                      print("❌ pages não encontradas no JSON")
-                              except Exception as e:
-                                  print(f"Erro ao parsear páginas: {e}")
-                          else:
-                              print(f"❌ API retornou {response.status}")
-
-                      if "toonlivre.net" in response.url or "challenges.cloudflare.com" in response.url:
-                          print(f"\nRESPONSE: {response.status} {response.url}")
-                          try:
-                              body_text = await response.text()
-                          except Exception as e:
-                              body_text = f"Erro ao ler body: {e}"
-                          resp_data = {
-                              "status": response.status,
-                              "url": response.url,
-                              "headers": dict(response.headers),
-                              "body": body_text
-                          }
-                          all_responses.append(resp_data)
-
-                  page.on('request', handle_request)
-                  page.on('response', handle_response)
-
-                  # Tenta acessar o capítulo com espera explícita pela API
                   try:
                       print("📖 Acessando capítulo...")
-                      async with page.expect_response(
-                          lambda r: is_chapter_api(r.url) and r.status == 200,
-                          timeout=60000
-                      ) as response_info:
-                          await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
-                      response = await response_info.value
-                      print(f"✓ API respondeu {response.status}")
-                      await asyncio.sleep(2)  # estabilização
-                  except Exception as e:
-                      print(f"⚠️ Primeira tentativa falhou: {e}")
-                      try:
-                          print("🔄 Recarregando...")
-                          async with page.expect_response(
-                              lambda r: is_chapter_api(r.url) and r.status == 200,
-                              timeout=60000
-                          ) as response_info:
-                              await page.reload(wait_until='domcontentloaded', timeout=60000)
-                          response = await response_info.value
-                          print(f"✓ API respondeu {response.status} após reload")
-                          await asyncio.sleep(2)
-                      except Exception as e2:
-                          print(f"❌ Falhou após reload: {e2}")
+                      await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
 
-                  # Se a API não confirmou pages, captura screenshot e falha
-                  if not chapter_ok:
-                      print("❌ API não retornou pages válidas. Capturando screenshot...")
+                      # Aguarda o cookie tl_cpass ser definido (o Turnstile é resolvido automaticamente)
+                      print("⏳ Aguardando cookie tl_cpass...")
+                      await page.wait_for_function(
+                          "() => document.cookie.includes('tl_cpass=')",
+                          timeout=30000  # 30 segundos é mais que suficiente
+                      )
+                      print("✓ Cookie tl_cpass encontrado no document.cookie")
+
+                  except Exception as e:
+                      print(f"❌ Falha ao carregar ou obter cookie: {e}")
                       await page.screenshot(path="failure.png", full_page=True)
                       await browser.close()
-                      print("Screenshot salvo como failure.png")
                       sys.exit(1)
+
+                  # Extrai o valor do cookie do contexto
+                  cookies = await context.cookies()
+                  tl_cpass = None
+                  for cookie in cookies:
+                      if cookie['name'] == 'tl_cpass':
+                          tl_cpass = cookie['value']
+                          break
+
+                  if not tl_cpass:
+                      print("❌ Cookie tl_cpass não encontrado na lista de cookies")
+                      await page.screenshot(path="failure.png", full_page=True)
+                      await browser.close()
+                      sys.exit(1)
+
+                  print(f"🍪 tl_cpass capturado: {tl_cpass[:30]}...")
 
                   await browser.close()
 
-                  # Salva todas as informações coletadas
-                  all_data = {
-                      "requests": all_requests,
-                      "responses": all_responses
-                  }
-                  with open("all_requests.json", "w") as f:
-                      json.dump(all_data, f, indent=2)
-                  print("\n✓ Todas as requisições/respostas salvas em all_requests.json")
+                  # Salva o cookie em token.json
+                  with open("token.json", "w") as f:
+                      json.dump({"tl_cpass": tl_cpass}, f, indent=2)
+                  print("✓ token.json atualizado com o cookie tl_cpass")
 
           asyncio.run(main())
           EOF
@@ -161,16 +106,10 @@ jobs:
           name: failure-screenshot
           path: failure.png
 
-      - name: Upload network activity (optional)
-        uses: actions/upload-artifact@v4
-        with:
-          name: network-activity
-          path: all_requests.json
-
-      - name: Commit network activity
+      - name: Commit updated token
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add all_requests.json
-          git diff --staged --quiet || git commit -m "chore: update network activity $(date +'%Y-%m-%d %H:%M')"
+          git add token.json
+          git diff --staged --quiet || git commit -m "chore: update tl_cpass cookie $(date +'%Y-%m-%d %H:%M')"
           git push
