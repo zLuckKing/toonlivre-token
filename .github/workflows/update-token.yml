@@ -1,106 +1,144 @@
-- name: Capture session state
-  run: |
-    xvfb-run --auto-servernum python3 << 'EOF'
-    import asyncio
-    import json
-    import sys
-    from playwright.async_api import async_playwright
+name: Update Token
 
-    CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
+on:
+  schedule:
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
 
-    def is_chapter_api(url):
-        return '/api/mangas/' in url and '/chapters/' in url
+permissions:
+  contents: write
 
-    async def main():
-        print("🚀 Iniciando captura do storage state...")
-        chapter_ok = False
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=False,
-                args=[
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-blink-features=AutomationControlled',
-                    '--window-size=1280,720',
-                ]
-            )
-            context = await browser.new_context(
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
-                viewport={'width': 1280, 'height': 720},
-                extra_http_headers={
-                    'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-                }
-            )
-            page = await context.new_page()
+      - name: Install dependencies
+        run: |
+          sudo apt-get install -y xvfb
+          pip install playwright
+          playwright install chromium
 
-            async def handle_response(response):
-                nonlocal chapter_ok
-                if is_chapter_api(response.url):
-                    print(f"✓ API de capítulo respondeu: {response.status}")
-                    if response.status == 200:
-                        try:
-                            data = await response.json()
-                            if 'pages' in data and len(data['pages']) > 0:
-                                print(f"✓ pages encontradas: {len(data['pages'])} páginas")
-                                chapter_ok = True
-                            else:
-                                print("❌ pages não encontradas no JSON")
-                        except Exception as e:
-                            print(f"Erro ao parsear páginas: {e}")
-                    else:
-                        print(f"❌ API retornou {response.status}")
+      - name: Capture session state
+        run: |
+          xvfb-run --auto-servernum python3 << 'EOF'
+          import asyncio
+          import json
+          import sys
+          from playwright.async_api import async_playwright
 
-            page.on('response', handle_response)
+          CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
 
-            # Tenta acessar o capítulo
-            try:
-                print("📖 Acessando capítulo...")
-                await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
-                # Aguarda explicitamente a resposta da API com status 200
-                await page.wait_for_response(
-                    lambda r: is_chapter_api(r.url) and r.status == 200,
-                    timeout=60000
-                )
-                await asyncio.sleep(2)  # estabilização final
-            except Exception as e:
-                print(f"⚠️ Primeira tentativa falhou: {e}")
-                try:
-                    print("🔄 Recarregando...")
-                    await page.reload(wait_until='domcontentloaded', timeout=60000)
-                    await page.wait_for_response(
-                        lambda r: is_chapter_api(r.url) and r.status == 200,
-                        timeout=60000
-                    )
-                    await asyncio.sleep(2)
-                except Exception as e2:
-                    print(f"❌ Falhou após reload: {e2}")
+          def is_chapter_api(url):
+              return '/api/mangas/' in url and '/chapters/' in url
 
-            # Se a API não confirmou pages, captura screenshot e falha
-            if not chapter_ok:
-                print("❌ API não retornou pages válidas. Capturando screenshot...")
-                await page.screenshot(path="failure.png", full_page=True)
-                await browser.close()
-                print("Screenshot salvo como failure.png")
-                sys.exit(1)  # Força falha do step
+          async def main():
+              print("🚀 Iniciando captura do storage state...")
+              chapter_ok = False
 
-            # Captura storage_state (após confirmação e sleep)
-            storage_state = await context.storage_state()
-            print("🍪 Storage state capturado com sucesso!")
-            print("Cookies:")
-            for cookie in storage_state["cookies"]:
-                print(f"  - {cookie['name']} ({cookie['domain']})")
-            print()
-            print("Origins:")
-            for origin in storage_state["origins"]:
-                print(f"  {origin['origin']}")
+              async with async_playwright() as p:
+                  browser = await p.chromium.launch(
+                      headless=False,
+                      args=[
+                          '--no-sandbox',
+                          '--disable-setuid-sandbox',
+                          '--disable-dev-shm-usage',
+                          '--disable-blink-features=AutomationControlled',
+                          '--window-size=1280,720',
+                      ]
+                  )
+                  context = await browser.new_context(
+                      user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
+                      viewport={'width': 1280, 'height': 720},
+                      extra_http_headers={
+                          'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+                      }
+                  )
+                  page = await context.new_page()
 
-            await browser.close()
+                  async def handle_response(response):
+                      nonlocal chapter_ok
+                      if is_chapter_api(response.url):
+                          print(f"✓ API de capítulo respondeu: {response.status}")
+                          if response.status == 200:
+                              try:
+                                  data = await response.json()
+                                  if 'pages' in data and len(data['pages']) > 0:
+                                      print(f"✓ pages encontradas: {len(data['pages'])} páginas")
+                                      chapter_ok = True
+                                  else:
+                                      print("❌ pages não encontradas no JSON")
+                              except Exception as e:
+                                  print(f"Erro ao parsear páginas: {e}")
+                          else:
+                              print(f"❌ API retornou {response.status}")
 
-            with open("storage_state.json", "w") as f:
-                json.dump(storage_state, f, indent=2)
-            print("✓ Storage State salvo em storage_state.json")
+                  page.on('response', handle_response)
 
-    asyncio.run(main())
-    EOF
+                  # Tenta acessar o capítulo
+                  try:
+                      print("📖 Acessando capítulo...")
+                      await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
+                      # Aguarda explicitamente a resposta da API com status 200
+                      await page.wait_for_response(
+                          lambda r: is_chapter_api(r.url) and r.status == 200,
+                          timeout=60000
+                      )
+                      await asyncio.sleep(2)  # estabilização final
+                  except Exception as e:
+                      print(f"⚠️ Primeira tentativa falhou: {e}")
+                      try:
+                          print("🔄 Recarregando...")
+                          await page.reload(wait_until='domcontentloaded', timeout=60000)
+                          await page.wait_for_response(
+                              lambda r: is_chapter_api(r.url) and r.status == 200,
+                              timeout=60000
+                          )
+                          await asyncio.sleep(2)
+                      except Exception as e2:
+                          print(f"❌ Falhou após reload: {e2}")
+
+                  # Se a API não confirmou pages, captura screenshot e falha
+                  if not chapter_ok:
+                      print("❌ API não retornou pages válidas. Capturando screenshot...")
+                      await page.screenshot(path="failure.png", full_page=True)
+                      await browser.close()
+                      print("Screenshot salvo como failure.png")
+                      sys.exit(1)  # Força falha do step
+
+                  # Captura storage_state (após confirmação e sleep)
+                  storage_state = await context.storage_state()
+                  print("🍪 Storage state capturado com sucesso!")
+                  print("Cookies:")
+                  for cookie in storage_state["cookies"]:
+                      print(f"  - {cookie['name']} ({cookie['domain']})")
+                  print()
+                  print("Origins:")
+                  for origin in storage_state["origins"]:
+                      print(f"  {origin['origin']}")
+
+                  await browser.close()
+
+                  with open("storage_state.json", "w") as f:
+                      json.dump(storage_state, f, indent=2)
+                  print("✓ Storage State salvo em storage_state.json")
+
+          asyncio.run(main())
+          EOF
+
+      - name: Upload failure screenshot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-screenshot
+          path: failure.png
+
+      - name: Commit storage state
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add storage_state.json
+          git diff --staged --quiet || git commit -m "chore: update storage state $(date +'%Y-%m-%d %H:%M')"
+          git push
