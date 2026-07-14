@@ -22,7 +22,7 @@ jobs:
           python -c "from importlib.metadata import version; print('Playwright version:', version('playwright'))"
           playwright install chromium
 
-      - name: Capture chapter-pass details
+      - name: Capture all network activity
         run: |
           xvfb-run --auto-servernum python3 << 'EOF'
           import asyncio
@@ -31,16 +31,14 @@ jobs:
           from playwright.async_api import async_playwright
 
           CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
-          collected_info = {
-              "requests": [],
-              "responses": []
-          }
+          all_requests = []
+          all_responses = []
 
           def is_chapter_api(url):
               return '/api/mangas/' in url and '/chapters/' in url
 
           async def main():
-              print("🚀 Iniciando captura das interações com /api/chapter-pass...")
+              print("🚀 Capturando todas as requisições/respostas relevantes...")
               chapter_ok = False
 
               async with async_playwright() as p:
@@ -64,17 +62,15 @@ jobs:
                   page = await context.new_page()
 
                   async def handle_request(request):
-                      if "/api/chapter-pass" in request.url:
-                          print("\n=== REQUEST chapter-pass ===")
-                          print("URL:", request.url)
-                          print("Headers:", dict(request.headers))
-                          body = request.post_data
-                          print("Body:", body)
-                          collected_info["requests"].append({
+                      if "toonlivre.net" in request.url or "challenges.cloudflare.com" in request.url:
+                          print(f"\nREQUEST: {request.method} {request.url}")
+                          req_data = {
+                              "method": request.method,
                               "url": request.url,
                               "headers": dict(request.headers),
-                              "body": body
-                          })
+                              "body": request.post_data
+                          }
+                          all_requests.append(req_data)
 
                   async def handle_response(response):
                       nonlocal chapter_ok
@@ -93,21 +89,19 @@ jobs:
                           else:
                               print(f"❌ API retornou {response.status}")
 
-                      if "/api/chapter-pass" in response.url:
-                          print("\n=== RESPONSE chapter-pass ===")
-                          print("Status:", response.status)
-                          print("Headers:", dict(response.headers))
+                      if "toonlivre.net" in response.url or "challenges.cloudflare.com" in response.url:
+                          print(f"\nRESPONSE: {response.status} {response.url}")
                           try:
                               body_text = await response.text()
-                              print("Body:", body_text)
                           except Exception as e:
                               body_text = f"Erro ao ler body: {e}"
-                              print(body_text)
-                          collected_info["responses"].append({
+                          resp_data = {
                               "status": response.status,
+                              "url": response.url,
                               "headers": dict(response.headers),
                               "body": body_text
-                          })
+                          }
+                          all_responses.append(resp_data)
 
                   page.on('request', handle_request)
                   page.on('response', handle_response)
@@ -149,9 +143,13 @@ jobs:
                   await browser.close()
 
                   # Salva todas as informações coletadas
-                  with open("chapter_pass_info.json", "w") as f:
-                      json.dump(collected_info, f, indent=2)
-                  print("\n✓ Interações com chapter-pass salvas em chapter_pass_info.json")
+                  all_data = {
+                      "requests": all_requests,
+                      "responses": all_responses
+                  }
+                  with open("all_requests.json", "w") as f:
+                      json.dump(all_data, f, indent=2)
+                  print("\n✓ Todas as requisições/respostas salvas em all_requests.json")
 
           asyncio.run(main())
           EOF
@@ -163,16 +161,16 @@ jobs:
           name: failure-screenshot
           path: failure.png
 
-      - name: Upload chapter-pass info (optional)
+      - name: Upload network activity (optional)
         uses: actions/upload-artifact@v4
         with:
-          name: chapter-pass-info
-          path: chapter_pass_info.json
+          name: network-activity
+          path: all_requests.json
 
-      - name: Commit chapter-pass info
+      - name: Commit network activity
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add chapter_pass_info.json
-          git diff --staged --quiet || git commit -m "chore: update chapter-pass info $(date +'%Y-%m-%d %H:%M')"
+          git add all_requests.json
+          git diff --staged --quiet || git commit -m "chore: update network activity $(date +'%Y-%m-%d %H:%M')"
           git push
