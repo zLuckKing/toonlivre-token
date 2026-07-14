@@ -1,4 +1,4 @@
-name: Update Token
+name: Update Token (debug mode)
 
 on:
   schedule:
@@ -22,7 +22,7 @@ jobs:
           python -c "from importlib.metadata import version; print('Playwright version:', version('playwright'))"
           playwright install chromium
 
-      - name: Capture tl_cpass cookie
+      - name: Debug & capture cookies (polling + Set-Cookie log)
         run: |
           xvfb-run --auto-servernum python3 << 'EOF'
           import asyncio
@@ -33,8 +33,7 @@ jobs:
           CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
 
           async def main():
-              print("🚀 Iniciando captura do cookie tl_cpass...")
-
+              print("🚀 Modo debug: polling de cookies + log de Set-Cookie")
               async with async_playwright() as p:
                   browser = await p.chromium.launch(
                       headless=False,
@@ -55,61 +54,88 @@ jobs:
                   )
                   page = await context.new_page()
 
+                  # Log de todas as requisições
+                  page.on('request', lambda req: print(f"REQ: {req.method} {req.url}"))
+
+                  # Log de respostas, com destaque ABSOLUTO para Set-Cookie
+                  async def log_response(response):
+                      print(f"RES: {response.status} {response.url}")
+                      if 'set-cookie' in response.headers:
+                          print("=" * 60)
+                          print(f"SET-COOKIE from: {response.url}")
+                          print(response.headers['set-cookie'])
+                          print("=" * 60)
+                  page.on('response', log_response)
+
                   try:
                       print("📖 Acessando capítulo...")
                       await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
 
-                      # Aguarda o cookie tl_cpass ser definido (o Turnstile é resolvido automaticamente)
-                      print("⏳ Aguardando cookie tl_cpass...")
-                      await page.wait_for_function(
-                          "() => document.cookie.includes('tl_cpass=')",
-                          timeout=30000  # 30 segundos é mais que suficiente
-                      )
-                      print("✓ Cookie tl_cpass encontrado no document.cookie")
+                      print("⏳ Polling de cookies (até 30 tentativas, intervalo 1s)...")
+                      tl_cpass_found = False
+                      for i in range(30):
+                          cookies = await context.cookies()
+                          cookie_names = [c["name"] for c in cookies]
+                          print(f"Tentativa {i+1}: cookies = {cookie_names}")
+
+                          if "tl_cpass" in cookie_names:
+                              print("✓ tl_cpass apareceu!")
+                              tl_cpass_found = True
+                              break
+
+                          await asyncio.sleep(1)
+
+                      if tl_cpass_found:
+                          # Extrai os dois cookies desejados
+                          cookie_dict = {
+                              c["name"]: c["value"]
+                              for c in cookies
+                              if c["name"] in ("tl_cpass", "cf_clearance")
+                          }
+                          print(f"Cookies capturados: {json.dumps(cookie_dict, indent=2)}")
+                          with open("token.json", "w") as f:
+                              json.dump(cookie_dict, f, indent=2)
+                          print("✓ token.json salvo com sucesso")
+                      else:
+                          print("❌ tl_cpass não apareceu após 30 segundos de polling")
+                          # Ainda tentamos salvar se cf_clearance existir (não deve ser o caso)
+                          cookies = await context.cookies()
+                          cookie_dict = {
+                              c["name"]: c["value"]
+                              for c in cookies
+                              if c["name"] in ("tl_cpass", "cf_clearance")
+                          }
+                          if cookie_dict:
+                              with open("token.json", "w") as f:
+                                  json.dump(cookie_dict, f, indent=2)
+                              print("Apenas cf_clearance encontrado (tl_cpass ausente)")
 
                   except Exception as e:
-                      print(f"❌ Falha ao carregar ou obter cookie: {e}")
-                      await page.screenshot(path="failure.png", full_page=True)
+                      print(f"⚠️ Erro durante navegação: {e}")
+                  finally:
+                      await page.screenshot(path="debug_screenshot.png", full_page=True)
+                      print("📸 Screenshot salvo como debug_screenshot.png")
                       await browser.close()
-                      sys.exit(1)
-
-                  # Extrai o valor do cookie do contexto
-                  cookies = await context.cookies()
-                  tl_cpass = None
-                  for cookie in cookies:
-                      if cookie['name'] == 'tl_cpass':
-                          tl_cpass = cookie['value']
-                          break
-
-                  if not tl_cpass:
-                      print("❌ Cookie tl_cpass não encontrado na lista de cookies")
-                      await page.screenshot(path="failure.png", full_page=True)
-                      await browser.close()
-                      sys.exit(1)
-
-                  print(f"🍪 tl_cpass capturado: {tl_cpass[:30]}...")
-
-                  await browser.close()
-
-                  # Salva o cookie em token.json
-                  with open("token.json", "w") as f:
-                      json.dump({"tl_cpass": tl_cpass}, f, indent=2)
-                  print("✓ token.json atualizado com o cookie tl_cpass")
 
           asyncio.run(main())
           EOF
 
-      - name: Upload failure screenshot
-        if: failure()
+      - name: Upload debug screenshot
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: failure-screenshot
-          path: failure.png
+          name: debug-screenshot
+          path: debug_screenshot.png
 
-      - name: Commit updated token
+      - name: Commit updated cookies (if token.json exists)
+        if: always()
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add token.json
-          git diff --staged --quiet || git commit -m "chore: update tl_cpass cookie $(date +'%Y-%m-%d %H:%M')"
-          git push
+          if [ -f token.json ]; then
+            git config user.name "github-actions"
+            git config user.email "github-actions@github.com"
+            git add token.json
+            git diff --staged --quiet || git commit -m "chore: update cookies $(date +'%Y-%m-%d %H:%M')"
+            git push
+          else
+            echo "token.json não foi gerado – commit ignorado."
+          fi
