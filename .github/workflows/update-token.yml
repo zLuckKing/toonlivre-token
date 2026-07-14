@@ -92,7 +92,6 @@ jobs:
                   except Exception:
                       pass
 
-                  # Tenta capturar a response da API do capítulo
                   chapter_response = None
                   try:
                       print("📖 Acessando capítulo...")
@@ -117,7 +116,6 @@ jobs:
                       except Exception as e2:
                           print(f"❌ Falhou após reload: {e2}")
 
-                  # Parseia o JSON enquanto o browser ainda tá aberto
                   if chapter_response and chapter_response.status == 200:
                       try:
                           data = await chapter_response.json()
@@ -131,9 +129,13 @@ jobs:
                   elif chapter_response:
                       print(f"❌ API retornou {chapter_response.status}")
 
+                  print("\n🍪 Cookies da sessão:")
+                  print(await context.cookies())
+                  print("\n📦 Storage state:")
+                  print(await context.storage_state())
+
                   await browser.close()
 
-                  # Validações
                   if not chapter_api_ok:
                       print("❌ API de capítulo não validada — não fazendo commit")
                       return
