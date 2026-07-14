@@ -19,6 +19,7 @@ jobs:
         run: |
           sudo apt-get install -y xvfb
           pip install playwright
+          python -c "import playwright; print('Playwright version:', playwright.__version__)"
           playwright install chromium
 
       - name: Capture session state
@@ -77,25 +78,28 @@ jobs:
 
                   page.on('response', handle_response)
 
-                  # Tenta acessar o capítulo
+                  # Tenta acessar o capítulo com espera explícita pela API
                   try:
                       print("📖 Acessando capítulo...")
-                      await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
-                      # Aguarda explicitamente a resposta da API com status 200
-                      await page.wait_for_response(
+                      async with page.expect_response(
                           lambda r: is_chapter_api(r.url) and r.status == 200,
                           timeout=60000
-                      )
-                      await asyncio.sleep(2)  # estabilização final
+                      ) as response_info:
+                          await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
+                      response = await response_info.value
+                      print(f"✓ API respondeu {response.status}")
+                      await asyncio.sleep(2)  # estabilização
                   except Exception as e:
                       print(f"⚠️ Primeira tentativa falhou: {e}")
                       try:
                           print("🔄 Recarregando...")
-                          await page.reload(wait_until='domcontentloaded', timeout=60000)
-                          await page.wait_for_response(
+                          async with page.expect_response(
                               lambda r: is_chapter_api(r.url) and r.status == 200,
                               timeout=60000
-                          )
+                          ) as response_info:
+                              await page.reload(wait_until='domcontentloaded', timeout=60000)
+                          response = await response_info.value
+                          print(f"✓ API respondeu {response.status} após reload")
                           await asyncio.sleep(2)
                       except Exception as e2:
                           print(f"❌ Falhou após reload: {e2}")
@@ -106,7 +110,7 @@ jobs:
                       await page.screenshot(path="failure.png", full_page=True)
                       await browser.close()
                       print("Screenshot salvo como failure.png")
-                      sys.exit(1)  # Força falha do step
+                      sys.exit(1)
 
                   # Captura storage_state (após confirmação e sleep)
                   storage_state = await context.storage_state()
