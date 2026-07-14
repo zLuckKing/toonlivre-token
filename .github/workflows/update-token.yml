@@ -130,11 +130,10 @@ jobs:
                   try:
                       print("📖 Acessando capítulo...")
                       async with page.expect_response(
-                          lambda r: is_chapter_api(r.url),
+                          lambda r: is_chapter_api(r.url) and r.status == 200,
                           timeout=60000
                       ) as response_info:
                           await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
-                          # Aguarda o fluxo completo: 403 → chapter-pass → 200
                           await asyncio.sleep(15)
                       chapter_response = await response_info.value
                       print(f"✓ API respondeu: {chapter_response.status}")
@@ -143,7 +142,7 @@ jobs:
                       try:
                           print("🔄 Recarregando...")
                           async with page.expect_response(
-                              lambda r: is_chapter_api(r.url),
+                              lambda r: is_chapter_api(r.url) and r.status == 200,
                               timeout=60000
                           ) as response_info:
                               await page.reload(wait_until='domcontentloaded', timeout=60000)
