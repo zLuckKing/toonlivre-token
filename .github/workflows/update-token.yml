@@ -1,8 +1,8 @@
-name: Update Token (debug + API test)
+name: Update Toonlivre Tokens (Full Bypass)
 
 on:
   schedule:
-    - cron: '0 */2 * * *'
+    - cron: '0 */1 * * *' # Roda a cada 1 hora
   workflow_dispatch:
 
 permissions:
@@ -19,131 +19,98 @@ jobs:
         run: |
           sudo apt-get install -y xvfb
           pip install playwright
-          python -c "from importlib.metadata import version; print('Playwright version:', version('playwright'))"
           playwright install chromium
 
-      - name: Debug & capture cookies + API test
+      - name: Bypass & Capture Secrets
         run: |
           xvfb-run --auto-servernum python3 << 'EOF'
           import asyncio
           import json
           import sys
+          import re
           from playwright.async_api import async_playwright
 
           CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
-          API_CHAPTER_URL = "https://toonlivre.net/api/mangas/obra-d32eb564/chapters/cap-a064a237-40"
 
           async def main():
-              print("🚀 Modo debug: capturando cookies + teste da API de capítulo")
+              print("🚀 Iniciando Bypass com Xvfb e captura de Senha AES...")
               async with async_playwright() as p:
                   browser = await p.chromium.launch(
                       headless=False,
                       args=[
                           '--no-sandbox',
                           '--disable-setuid-sandbox',
-                          '--disable-dev-shm-usage',
                           '--disable-blink-features=AutomationControlled',
-                          '--window-size=1280,720',
                       ]
                   )
                   context = await browser.new_context(
-                      user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
-                      viewport={'width': 1280, 'height': 720},
-                      extra_http_headers={
-                          'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-                      }
+                      user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                      viewport={'width': 1280, 'height': 720}
                   )
                   page = await context.new_page()
 
-                  page.on('request', lambda req: print(f"REQ: {req.method} {req.url}"))
-                  async def log_response(response):
-                      print(f"RES: {response.status} {response.url}")
-                      if 'set-cookie' in response.headers:
-                          print("=" * 60)
-                          print(f"SET-COOKIE from: {response.url}")
-                          print(response.headers['set-cookie'])
-                          print("=" * 60)
-                  page.on('response', log_response)
-
                   try:
-                      print("📖 Acessando capítulo...")
-                      await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
-
-                      print("⏳ Polling de cookies (até 30 tentativas, intervalo 1s)...")
-                      tl_cpass_found = False
-                      for i in range(30):
+                      print("📖 Acessando site...")
+                      # Timeout estendido para 90s para passar pela Cloudflare
+                      await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=90000)
+                      
+                      # Espera o cookie tl_cpass e o bundle JS carregarem
+                      print("⏳ Aguardando processamento do JavaScript...")
+                      aes_key = ""
+                      xtoon = ""
+                      tl_cpass = ""
+                      
+                      for _ in range(30):
                           cookies = await context.cookies()
-                          cookie_names = [c["name"] for c in cookies]
-                          print(f"Tentativa {i+1}: cookies = {cookie_names}")
+                          tl_cpass = next((c['value'] for c in cookies if c['name'] == 'tl_cpass'), "")
+                          
+                          # Se o cookie apareceu, vamos caçar a senha no JS
+                          if tl_cpass:
+                              # Captura a URL do bundle assets/index-XXXX.js
+                              script_srcs = await page.evaluate("() => Array.from(document.querySelectorAll('script[src*=\"assets/index-\"]')).map(s => s.src)")
+                              if script_srcs:
+                                  js_text = await (await page.request.get(script_srcs[0])).text()
+                                  
+                                  # Regex da senha que descobrimos no DevTools
+                                  key_match = re.search(r'([A-Z][a-z]+-[A-Z][a-z]+-[A-Z][a-z]+[a-f0-9]+)', js_text)
+                                  xtoon_match = re.search(r'x-toon-verify":"([^"]+)"', js_text)
+                                  
+                                  if key_match: aes_key = key_match.group(1)
+                                  if xtoon_match: xtoon = xtoon_match.group(1)
+                                  
+                                  if aes_key:
+                                      print(f"✅ Senha AES encontrada: {aes_key}")
+                                      break
+                          await asyncio.sleep(2)
 
-                          if "tl_cpass" in cookie_names:
-                              print("✓ tl_cpass apareceu!")
-                              tl_cpass_found = True
-                              break
+                      # Se falhar a captura dinâmica, usamos a Magnesium como fallback
+                      if not aes_key:
+                          print("⚠️ Senha não encontrada dinamicamente, usando a Magnesium-Strike como padrão.")
+                          aes_key = "Magnesium-Strike-Astonish3393de932"
 
-                          await asyncio.sleep(1)
+                      token_data = {
+                          'tl_cpass': tl_cpass,
+                          'aes_key': aes_key,
+                          'x_toon_verify': xtoon if xtoon else "manual_verify"
+                      }
 
-                      if not tl_cpass_found:
-                          print("❌ tl_cpass não apareceu após 30 segundos de polling")
-                          cookies = await context.cookies()
-                          cookie_dict = {
-                              c["name"]: c["value"]
-                              for c in cookies
-                              if c["name"] in ("tl_cpass", "cf_clearance")
-                          }
-                          if cookie_dict:
-                              with open("token.json", "w") as f:
-                                  json.dump(cookie_dict, f, indent=2)
-                              print("Apenas cf_clearance encontrado (tl_cpass ausente)")
-                      else:
-                          cookies = await context.cookies()
-                          cookie_dict = {
-                              c["name"]: c["value"]
-                              for c in cookies
-                              if c["name"] in ("tl_cpass", "cf_clearance")
-                          }
-                          print(f"Cookies capturados: {json.dumps(cookie_dict, indent=2)}")
-                          with open("token.json", "w") as f:
-                              json.dump(cookie_dict, f, indent=2)
-                          print("✓ token.json salvo")
-
-                          print("\n🧪 Testando API de capítulo com os cookies atuais...")
-                          api_response = await context.request.get(API_CHAPTER_URL)
-                          print(f"Status: {api_response.status}")
-                          body_text = await api_response.text()
-                          print(f"Body (primeiros 500 chars): {body_text[:500]}")
-
-                          if api_response.status == 200:
-                              print("✅ API respondeu 200! Cookies são suficientes!")
-                          else:
-                              print("❌ API não respondeu 200 – faltam headers ou outros fatores")
+                      with open('token.json', 'w') as f:
+                          json.dump(token_data, f, indent=2)
+                      print("✅ token.json atualizado com sucesso!")
 
                   except Exception as e:
-                      print(f"⚠️ Erro durante navegação: {e}")
+                      print(f"❌ Erro crítico: {e}")
+                      sys.exit(1)
                   finally:
-                      await page.screenshot(path="debug_screenshot.png", full_page=True)
-                      print("📸 Screenshot salvo")
                       await browser.close()
 
           asyncio.run(main())
           EOF
 
-      - name: Upload debug screenshot
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-screenshot
-          path: debug_screenshot.png
-
-      - name: Commit updated cookies
-        if: always()
+      - name: Commit changes
         run: |
-          if [ -f token.json ]; then
-            git config user.name "github-actions"
-            git config user.email "github-actions@github.com"
-            git add token.json
-            git diff --staged --quiet || git commit -m "chore: update cookies $(date +'%Y-%m-%d %H:%M')"
-            git push
-          else
-            echo "token.json não foi gerado – commit ignorado."
-          fi
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add token.json
+          git diff --staged --quiet || git commit -m "chore: refresh secrets $(date +'%Y-%m-%d %H:%M')"
+          git push
