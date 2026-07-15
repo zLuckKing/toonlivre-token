@@ -1,0 +1,25 @@
+- name: Testar headers recém-capturados
+  run: |
+    python3 << 'EOF'
+    import json, requests, sys
+
+    with open("headers.json") as f:
+        h = json.load(f)
+
+    url = "https://toonlivre.net/api/manga-by-slug/guerreiro-da-espada-mental"
+    headers = {
+        "Accept": "*/*",
+        "Referer": "https://toonlivre.net/",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 16; wv) AppleWebKit/537.36 Chrome/150.0.7871.46",
+        "X-Toon-Verify": h["X-Toon-Verify"],
+        "Toonlivre-Pass": h["Toonlivre-Pass"],
+    }
+
+    r = requests.get(url, headers=headers, timeout=15)
+    print(f"Status: {r.status_code}")
+    if r.status_code == 200:
+        print("✅ Headers válidos!")
+    else:
+        print("❌ Headers rejeitados.")
+        sys.exit(1)
+    EOF
