@@ -1,18 +1,15 @@
-name: Upgrade Token
+name: Refresh Cookies
 
 on:
   schedule:
-    - cron: '0 */2 * * *'
+    - cron: '*/5 * * * *'   # a cada 5 minutos
   workflow_dispatch:
-  push:
-    paths-ignore:
-      - 'headers.json'   # ignora pushes causados pelo commit do próprio workflow
 
 permissions:
   contents: write
 
 jobs:
-  capture-headers:
+  refresh:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -21,12 +18,10 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get install -y xvfb
-          pip install playwright requests
-          python -c "from importlib.metadata import version; print('Playwright version:', version('playwright'))"
+          pip install playwright
           playwright install chromium
 
-      - name: Capture X-Toon-Verify and Toonlivre-Pass
-        id: capture
+      - name: Capture cookies via Playwright
         run: |
           xvfb-run --auto-servernum python3 << 'EOF'
           import asyncio
@@ -35,113 +30,61 @@ jobs:
           from playwright.async_api import async_playwright
 
           CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
-          TARGET_HEADERS = {"x-toon-verify", "toonlivre-pass"}
 
           async def main():
-              collected = {}
-              print("🚀 Capturando headers do app oficial...")
+              print("🚀 Renovando cookies...")
               async with async_playwright() as p:
                   browser = await p.chromium.launch(
                       headless=False,
-                      args=[
-                          '--no-sandbox',
-                          '--disable-setuid-sandbox',
-                          '--disable-dev-shm-usage',
-                          '--disable-blink-features=AutomationControlled',
-                          '--window-size=1280,720',
-                      ]
+                      args=['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
+                            '--disable-blink-features=AutomationControlled','--window-size=1280,720']
                   )
                   context = await browser.new_context(
                       user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
                       viewport={'width': 1280, 'height': 720},
-                      extra_http_headers={
-                          'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-                      }
+                      extra_http_headers={'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'}
                   )
                   page = await context.new_page()
-
-                  async def handle_request(request):
-                      nonlocal collected
-                      if len(collected) == len(TARGET_HEADERS):
-                          return
-                      req_headers = request.headers
-                      for key in TARGET_HEADERS:
-                          if key in req_headers:
-                              collected[key] = req_headers[key]
-                              print(f"✓ Capturado: {key} = {req_headers[key]}")
-                      if len(collected) == len(TARGET_HEADERS):
-                          print("✅ Todos os headers capturados!")
-
-                  page.on('request', handle_request)
 
                   try:
                       print("📖 Acessando capítulo...")
                       await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
+                      # Aguarda até 30s pelo cookie tl_cpass
                       for i in range(30):
-                          if len(collected) == len(TARGET_HEADERS):
+                          cookies = await context.cookies()
+                          names = [c["name"] for c in cookies]
+                          if "tl_cpass" in names:
                               break
                           await asyncio.sleep(1)
+                      else:
+                          print("❌ tl_cpass não apareceu.")
+                          sys.exit(1)
+
+                      # Extrai os dois cookies
+                      all_cookies = await context.cookies()
+                      cf = next((c["value"] for c in all_cookies if c["name"] == "cf_clearance"), "")
+                      tl = next((c["value"] for c in all_cookies if c["name"] == "tl_cpass"), "")
+                      if not cf or not tl:
+                          print("❌ Faltam cookies.")
+                          sys.exit(1)
+
+                      with open("token.json", "w") as f:
+                          json.dump({"tl_cpass": tl, "cf_clearance": cf}, f, indent=2)
+                      print("✅ token.json atualizado")
+
                   except Exception as e:
-                      print(f"⚠️ Erro: {e}")
+                      print(f"❌ Erro: {e}")
+                      sys.exit(1)
                   finally:
-                      await page.screenshot(path="debug_screenshot.png", full_page=True)
                       await browser.close()
-
-              if not collected:
-                  print("❌ Nenhum header capturado.")
-                  sys.exit(1)
-
-              output = {
-                  "X-Toon-Verify": collected.get("x-toon-verify", ""),
-                  "Toonlivre-Pass": collected.get("toonlivre-pass", "")
-              }
-              with open("headers.json", "w") as f:
-                  json.dump(output, f, indent=2)
-              print("✓ headers.json salvo com sucesso")
 
           asyncio.run(main())
           EOF
 
-      - name: Testar headers recém-capturados
-        run: |
-          python3 << 'EOF'
-          import json
-          import sys
-          import requests
-
-          with open("headers.json") as f:
-              h = json.load(f)
-
-          url = "https://toonlivre.net/api/manga-by-slug/guerreiro-da-espada-mental"
-          headers = {
-              "Accept": "*/*",
-              "Referer": "https://toonlivre.net/",
-              "User-Agent": "Mozilla/5.0 (Linux; Android 16; wv) AppleWebKit/537.36 Chrome/150.0.7871.46",
-              "X-Toon-Verify": h["X-Toon-Verify"],
-              "Toonlivre-Pass": h["Toonlivre-Pass"],
-          }
-
-          r = requests.get(url, headers=headers, timeout=15)
-          print(f"Status: {r.status_code}")
-          if r.status_code == 200:
-              print("✅ Headers válidos! Commit será realizado.")
-          else:
-              print(f"❌ Headers rejeitados (status {r.status_code}). Nenhum commit será feito.")
-              sys.exit(1)
-          EOF
-
-      - name: Upload debug screenshot (on failure)
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-screenshot
-          path: debug_screenshot.png
-
-      - name: Commit updated headers
-        if: success()
+      - name: Commit updated token
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add headers.json
-          git diff --staged --quiet || git commit -m "chore: update app headers $(date +'%Y-%m-%d %H:%M')"
+          git add token.json
+          git diff --staged --quiet || git commit -m "chore: refresh cookies $(date +'%Y-%m-%d %H:%M')"
           git push
