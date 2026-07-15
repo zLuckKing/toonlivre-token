@@ -2,7 +2,7 @@ name: Capture App Headers
 
 on:
   schedule:
-    - cron: '0 */2 * * *'   # a cada 2 horas
+    - cron: '0 */2 * * *'
   workflow_dispatch:
 
 permissions:
@@ -30,11 +30,12 @@ jobs:
           import sys
           from playwright.async_api import async_playwright
 
-          CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"  # qualquer capítulo que dispare as APIs
-          TARGET_HEADERS = {"x-toon-verify", "toonlivre-pass"}  # case-insensitive
-          collected = {}
+          CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
+          TARGET_HEADERS = {"x-toon-verify", "toonlivre-pass"}
+          collected = {}  # <-- agora está no escopo da main (global ao script)
 
           async def main():
+              global collected
               print("🚀 Capturando headers do app oficial...")
               async with async_playwright() as p:
                   browser = await p.chromium.launch(
@@ -56,18 +57,15 @@ jobs:
                   )
                   page = await context.new_page()
 
-                  # Intercepta todas as requisições para capturar os headers desejados
                   async def handle_request(request):
-                      nonlocal collected
-                      if collected:  # já encontrou tudo, pode parar
+                      nonlocal collected  # <-- agora funciona porque 'collected' está no escopo superior
+                      if len(collected) == len(TARGET_HEADERS):
                           return
-                      # Verifica se a requisição contém algum dos headers alvo
                       req_headers = request.headers
                       for key in TARGET_HEADERS:
                           if key in req_headers:
                               collected[key] = req_headers[key]
                               print(f"✓ Capturado: {key} = {req_headers[key]}")
-                      # Se já temos ambos, podemos remover o listener (não obrigatório)
                       if len(collected) == len(TARGET_HEADERS):
                           print("✅ Todos os headers capturados!")
 
@@ -76,7 +74,6 @@ jobs:
                   try:
                       print("📖 Acessando capítulo...")
                       await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
-                      # Aguarda até 30 segundos para que as requisições autenticadas ocorram
                       for i in range(30):
                           if len(collected) == len(TARGET_HEADERS):
                               break
@@ -91,7 +88,6 @@ jobs:
                   print("❌ Nenhum header capturado.")
                   sys.exit(1)
 
-              # Salva os headers em ordem padronizada (minúsculas)
               output = {
                   "X-Toon-Verify": collected.get("x-toon-verify", ""),
                   "Toonlivre-Pass": collected.get("toonlivre-pass", "")
