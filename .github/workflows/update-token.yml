@@ -1,5 +1,4 @@
-yml
-name: Auto-Capture Secrets (Hardcore Bypass)
+name: Auto-Capture Secrets (Bypass DNS)
 
 on:
   schedule:
@@ -22,69 +21,88 @@ jobs:
           pip install playwright
           playwright install chromium
 
-      - name: Automatic AES Discovery (Direct IP Mode)
+      - name: Automatic AES Discovery
         run: |
           xvfb-run --auto-servernum python3 << 'EOF'
-          import asyncio, json, sys, re, time
+          import asyncio
+          import json
+          import sys
+          import re
+          import time
           from playwright.async_api import async_playwright
 
-          # Usamos o IP direto para pular o DNS
+          # Usamos o IP direto para pular o DNS do GitHub
           IP_SITE = "104.21.35.220"
           TARGET_URL = f"https://{IP_SITE}/guerreiro-da-espada-mental/40"
 
           async def main():
               print(f"🚀 Iniciando captura via IP direto: {IP_SITE}")
               async with async_playwright() as p:
-                  # Ignoramos erros de certificado HTTPS (causados pelo uso do IP direto)
-                  browser = await p.chromium.launch(headless=False, args=['--no-sandbox', '--ignore-certificate-errors'])
+                  # Ignoramos erros de certificado causados pelo uso do IP na URL
+                  browser = await p.chromium.launch(
+                      headless=False, 
+                      args=['--no-sandbox', '--ignore-certificate-errors']
+                  )
                   context = await browser.new_context(
                       user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                      extra_http_headers={'Host': 'toonlivre.net'} # CRUCIAL: Diz ao servidor quem somos
+                      extra_http_headers={'Host': 'toonlivre.net'}
                   )
                   page = await context.new_page()
 
                   try:
-                      print("🌐 Navegando...")
+                      print("🌐 Navegando até o site...")
                       await page.goto(TARGET_URL, wait_until='domcontentloaded', timeout=90000)
                       await asyncio.sleep(15) 
                       
-                      aes_key = None
-                      
-                      # Extração agressiva
+                      aes_key = ""
+                      xtoon = "manual_verify"
+
+                      # Localiza o script do bundle assets/index
                       scripts = await page.evaluate("() => Array.from(document.querySelectorAll('script')).map(s => s.src)")
                       for src in scripts:
                           if 'assets/index-' in src:
-                              # Corrigimos a URL do script para usar o Host correto
-                              js_url = src.replace(IP_SITE, 'toonlivre.net') if IP_SITE in src else src
+                              # Corrigimos a URL do script para usar o Host correto via IP
+                              js_url = src.replace('toonlivre.net', IP_SITE)
                               print(f"🔎 Lendo bundle: {js_url}")
                               
-                              # Pegamos o JS via request manual com o Host correto
-                              js_resp = await page.request.get(js_url, headers={'Host': 'toonlivre.net'})
-                              js_text = await js_resp.text()
-                              
-                              k = re.search(r'([A-Z][a-z]+-[A-Z][a-z]+-[A-Z][a-z]+[a-f0-9]+)', js_text)
-                              if k:
-                                  aes_key = k.group(1)
-                                  print(f"✅ Senha encontrada: {aes_key}")
+                              try:
+                                  js_resp = await page.request.get(js_url, headers={'Host': 'toonlivre.net'})
+                                  js_text = await js_resp.text()
+                                  
+                                  # Regex para capturar a senha AES dinâmica
+                                  k = re.search(r'([A-Z][a-z]+-[A-Z][a-z]+-[A-Z][a-z]+[a-f0-9]+)', js_text)
+                                  x = re.search(r'x-toon-verify":"([^"]+)"', js_text)
+                                  
+                                  if k:
+                                      aes_key = k.group(1)
+                                      print(f"✅ Senha encontrada: {aes_key}")
+                                  if x:
+                                      xtoon = x.group(1)
                                   break
+                              except Exception as e:
+                                  print(f"Erro ao ler JS: {e}")
 
-                      # Fallback caso o IP direto seja barrado pela Cloudflare
+                      # Fallback caso a captura falhe
                       if not aes_key:
                           aes_key = "Magnesium-Strike-Astonish3393de932"
-                          print("⚠️ Usando senha padrão (fallback)")
+                          print("⚠️ Usando senha de fallback.")
 
+                      # Salva o resultado
                       with open("token.json", "w") as f:
                           json.dump({
-                              "tl_cpass": "bypass_ip",
+                              "tl_cpass": "bypass_dns_active",
                               "aes_key": aes_key,
+                              "x_toon_verify": xtoon,
                               "updated_at": int(time.time())
                           }, f, indent=2)
+                      print("✅ Arquivo token.json gerado.")
                           
                   except Exception as e:
-                      print(f"❌ Erro: {e}")
+                      print(f"❌ Erro na automação: {e}")
                       sys.exit(1)
                   finally:
                       await browser.close()
+
           asyncio.run(main())
           EOF
 
