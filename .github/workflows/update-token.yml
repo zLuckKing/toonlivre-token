@@ -31,7 +31,6 @@ jobs:
           from playwright.async_api import async_playwright
 
           CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
-          # URL direta da API de capítulo (extraída da página)
           API_CHAPTER_URL = "https://toonlivre.net/api/mangas/obra-d32eb564/chapters/cap-a064a237-40"
 
           async def main():
@@ -56,7 +55,6 @@ jobs:
                   )
                   page = await context.new_page()
 
-                  # Log de requisições e respostas
                   page.on('request', lambda req: print(f"REQ: {req.method} {req.url}"))
                   async def log_response(response):
                       print(f"RES: {response.status} {response.url}")
@@ -85,10 +83,8 @@ jobs:
 
                           await asyncio.sleep(1)
 
-                      # Se ainda não encontrou, talvez tenha falhado
                       if not tl_cpass_found:
                           print("❌ tl_cpass não apareceu após 30 segundos de polling")
-                          # Ainda tenta salvar cf_clearance se existir
                           cookies = await context.cookies()
                           cookie_dict = {
                               c["name"]: c["value"]
@@ -111,7 +107,6 @@ jobs:
                               json.dump(cookie_dict, f, indent=2)
                           print("✓ token.json salvo")
 
-                          # ---- TESTE DA API USANDO O MESMO CONTEXTO ----
                           print("\n🧪 Testando API de capítulo com os cookies atuais...")
                           api_response = await context.request.get(API_CHAPTER_URL)
                           print(f"Status: {api_response.status}")
@@ -127,7 +122,7 @@ jobs:
                       print(f"⚠️ Erro durante navegação: {e}")
                   finally:
                       await page.screenshot(path="debug_screenshot.png", full_page=True)
-                      print("📸 Screenshot salvo como debug_screenshot.png")
+                      print("📸 Screenshot salvo")
                       await browser.close()
 
           asyncio.run(main())
@@ -140,7 +135,7 @@ jobs:
           name: debug-screenshot
           path: debug_screenshot.png
 
-      - name: Commit updated cookies (if token.json exists)
+      - name: Commit updated cookies
         if: always()
         run: |
           if [ -f token.json ]; then
