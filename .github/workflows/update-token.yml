@@ -21,11 +21,12 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get install -y xvfb
-          pip install playwright
+          pip install playwright requests
           python -c "from importlib.metadata import version; print('Playwright version:', version('playwright'))"
           playwright install chromium
 
       - name: Capture X-Toon-Verify and Toonlivre-Pass
+        id: capture
         run: |
           xvfb-run --auto-servernum python3 << 'EOF'
           import asyncio
@@ -99,6 +100,34 @@ jobs:
               print("✓ headers.json salvo com sucesso")
 
           asyncio.run(main())
+          EOF
+
+      - name: Testar headers recém-capturados
+        run: |
+          python3 << 'EOF'
+          import json
+          import sys
+          import requests
+
+          with open("headers.json") as f:
+              h = json.load(f)
+
+          url = "https://toonlivre.net/api/manga-by-slug/guerreiro-da-espada-mental"
+          headers = {
+              "Accept": "*/*",
+              "Referer": "https://toonlivre.net/",
+              "User-Agent": "Mozilla/5.0 (Linux; Android 16; wv) AppleWebKit/537.36 Chrome/150.0.7871.46",
+              "X-Toon-Verify": h["X-Toon-Verify"],
+              "Toonlivre-Pass": h["Toonlivre-Pass"],
+          }
+
+          r = requests.get(url, headers=headers, timeout=15)
+          print(f"Status: {r.status_code}")
+          if r.status_code == 200:
+              print("✅ Headers válidos! Commit será realizado.")
+          else:
+              print(f"❌ Headers rejeitados (status {r.status_code}). Nenhum commit será feito.")
+              sys.exit(1)
           EOF
 
       - name: Upload debug screenshot (on failure)
