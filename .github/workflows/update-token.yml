@@ -1,75 +1,118 @@
-- name: Capture X-Toon-Verify and Toonlivre-Pass
-  run: |
-    xvfb-run --auto-servernum python3 << 'EOF'
-    import asyncio
-    import json
-    import sys
-    from playwright.async_api import async_playwright
+name: Upgrade Token
 
-    CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
-    TARGET_HEADERS = {"x-toon-verify", "toonlivre-pass"}
+on:
+  schedule:
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+  push:
+    paths-ignore:
+      - 'headers.json'   # ignora pushes causados pelo commit do próprio workflow
 
-    async def main():
-        collected = {}  # agora dentro de main, evita confusão de escopo
-        print("🚀 Capturando headers do app oficial...")
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=False,
-                args=[
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-blink-features=AutomationControlled',
-                    '--window-size=1280,720',
-                ]
-            )
-            context = await browser.new_context(
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
-                viewport={'width': 1280, 'height': 720},
-                extra_http_headers={
-                    'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-                }
-            )
-            page = await context.new_page()
+permissions:
+  contents: write
 
-            async def handle_request(request):
-                nonlocal collected
-                if len(collected) == len(TARGET_HEADERS):
-                    return
-                req_headers = request.headers
-                for key in TARGET_HEADERS:
-                    if key in req_headers:
-                        collected[key] = req_headers[key]
-                        print(f"✓ Capturado: {key} = {req_headers[key]}")
-                if len(collected) == len(TARGET_HEADERS):
-                    print("✅ Todos os headers capturados!")
+jobs:
+  capture-headers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-            page.on('request', handle_request)
+      - name: Install dependencies
+        run: |
+          sudo apt-get install -y xvfb
+          pip install playwright
+          python -c "from importlib.metadata import version; print('Playwright version:', version('playwright'))"
+          playwright install chromium
 
-            try:
-                print("📖 Acessando capítulo...")
-                await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
-                for i in range(30):
-                    if len(collected) == len(TARGET_HEADERS):
-                        break
-                    await asyncio.sleep(1)
-            except Exception as e:
-                print(f"⚠️ Erro: {e}")
-            finally:
-                await page.screenshot(path="debug_screenshot.png", full_page=True)
-                await browser.close()
+      - name: Capture X-Toon-Verify and Toonlivre-Pass
+        run: |
+          xvfb-run --auto-servernum python3 << 'EOF'
+          import asyncio
+          import json
+          import sys
+          from playwright.async_api import async_playwright
 
-        if not collected:
-            print("❌ Nenhum header capturado.")
-            sys.exit(1)
+          CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
+          TARGET_HEADERS = {"x-toon-verify", "toonlivre-pass"}
 
-        output = {
-            "X-Toon-Verify": collected.get("x-toon-verify", ""),
-            "Toonlivre-Pass": collected.get("toonlivre-pass", "")
-        }
-        with open("headers.json", "w") as f:
-            json.dump(output, f, indent=2)
-        print("✓ headers.json salvo com sucesso")
+          async def main():
+              collected = {}
+              print("🚀 Capturando headers do app oficial...")
+              async with async_playwright() as p:
+                  browser = await p.chromium.launch(
+                      headless=False,
+                      args=[
+                          '--no-sandbox',
+                          '--disable-setuid-sandbox',
+                          '--disable-dev-shm-usage',
+                          '--disable-blink-features=AutomationControlled',
+                          '--window-size=1280,720',
+                      ]
+                  )
+                  context = await browser.new_context(
+                      user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
+                      viewport={'width': 1280, 'height': 720},
+                      extra_http_headers={
+                          'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+                      }
+                  )
+                  page = await context.new_page()
 
-    asyncio.run(main())
-    EOF
+                  async def handle_request(request):
+                      nonlocal collected
+                      if len(collected) == len(TARGET_HEADERS):
+                          return
+                      req_headers = request.headers
+                      for key in TARGET_HEADERS:
+                          if key in req_headers:
+                              collected[key] = req_headers[key]
+                              print(f"✓ Capturado: {key} = {req_headers[key]}")
+                      if len(collected) == len(TARGET_HEADERS):
+                          print("✅ Todos os headers capturados!")
+
+                  page.on('request', handle_request)
+
+                  try:
+                      print("📖 Acessando capítulo...")
+                      await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
+                      for i in range(30):
+                          if len(collected) == len(TARGET_HEADERS):
+                              break
+                          await asyncio.sleep(1)
+                  except Exception as e:
+                      print(f"⚠️ Erro: {e}")
+                  finally:
+                      await page.screenshot(path="debug_screenshot.png", full_page=True)
+                      await browser.close()
+
+              if not collected:
+                  print("❌ Nenhum header capturado.")
+                  sys.exit(1)
+
+              output = {
+                  "X-Toon-Verify": collected.get("x-toon-verify", ""),
+                  "Toonlivre-Pass": collected.get("toonlivre-pass", "")
+              }
+              with open("headers.json", "w") as f:
+                  json.dump(output, f, indent=2)
+              print("✓ headers.json salvo com sucesso")
+
+          asyncio.run(main())
+          EOF
+
+      - name: Upload debug screenshot (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshot
+          path: debug_screenshot.png
+
+      - name: Commit updated headers
+        if: success()
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add headers.json
+          git diff --staged --quiet || git commit -m "chore: update app headers $(date +'%Y-%m-%d %H:%M')"
+          git push
