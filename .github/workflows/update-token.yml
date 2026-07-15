@@ -1,15 +1,15 @@
-name: Update Token (debug + API test)
+name: Capture App Headers
 
 on:
   schedule:
-    - cron: '0 */2 * * *'
+    - cron: '0 */2 * * *'   # a cada 2 horas
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  update:
+  capture-headers:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -22,7 +22,7 @@ jobs:
           python -c "from importlib.metadata import version; print('Playwright version:', version('playwright'))"
           playwright install chromium
 
-      - name: Debug & capture cookies + API test
+      - name: Capture X-Toon-Verify and Toonlivre-Pass
         run: |
           xvfb-run --auto-servernum python3 << 'EOF'
           import asyncio
@@ -30,11 +30,12 @@ jobs:
           import sys
           from playwright.async_api import async_playwright
 
-          CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
-          API_CHAPTER_URL = "https://toonlivre.net/api/mangas/obra-d32eb564/chapters/cap-a064a237-40"
+          CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"  # qualquer capítulo que dispare as APIs
+          TARGET_HEADERS = {"x-toon-verify", "toonlivre-pass"}  # case-insensitive
+          collected = {}
 
           async def main():
-              print("🚀 Modo debug: capturando cookies + teste da API de capítulo")
+              print("🚀 Capturando headers do app oficial...")
               async with async_playwright() as p:
                   browser = await p.chromium.launch(
                       headless=False,
@@ -55,95 +56,64 @@ jobs:
                   )
                   page = await context.new_page()
 
-                  page.on('request', lambda req: print(f"REQ: {req.method} {req.url}"))
-                  async def log_response(response):
-                      print(f"RES: {response.status} {response.url}")
-                      if 'set-cookie' in response.headers:
-                          print("=" * 60)
-                          print(f"SET-COOKIE from: {response.url}")
-                          print(response.headers['set-cookie'])
-                          print("=" * 60)
-                  page.on('response', log_response)
+                  # Intercepta todas as requisições para capturar os headers desejados
+                  async def handle_request(request):
+                      nonlocal collected
+                      if collected:  # já encontrou tudo, pode parar
+                          return
+                      # Verifica se a requisição contém algum dos headers alvo
+                      req_headers = request.headers
+                      for key in TARGET_HEADERS:
+                          if key in req_headers:
+                              collected[key] = req_headers[key]
+                              print(f"✓ Capturado: {key} = {req_headers[key]}")
+                      # Se já temos ambos, podemos remover o listener (não obrigatório)
+                      if len(collected) == len(TARGET_HEADERS):
+                          print("✅ Todos os headers capturados!")
+
+                  page.on('request', handle_request)
 
                   try:
                       print("📖 Acessando capítulo...")
                       await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
-
-                      print("⏳ Polling de cookies (até 30 tentativas, intervalo 1s)...")
-                      tl_cpass_found = False
+                      # Aguarda até 30 segundos para que as requisições autenticadas ocorram
                       for i in range(30):
-                          cookies = await context.cookies()
-                          cookie_names = [c["name"] for c in cookies]
-                          print(f"Tentativa {i+1}: cookies = {cookie_names}")
-
-                          if "tl_cpass" in cookie_names:
-                              print("✓ tl_cpass apareceu!")
-                              tl_cpass_found = True
+                          if len(collected) == len(TARGET_HEADERS):
                               break
-
                           await asyncio.sleep(1)
-
-                      if not tl_cpass_found:
-                          print("❌ tl_cpass não apareceu após 30 segundos de polling")
-                          cookies = await context.cookies()
-                          cookie_dict = {
-                              c["name"]: c["value"]
-                              for c in cookies
-                              if c["name"] in ("tl_cpass", "cf_clearance")
-                          }
-                          if cookie_dict:
-                              with open("token.json", "w") as f:
-                                  json.dump(cookie_dict, f, indent=2)
-                              print("Apenas cf_clearance encontrado (tl_cpass ausente)")
-                      else:
-                          cookies = await context.cookies()
-                          cookie_dict = {
-                              c["name"]: c["value"]
-                              for c in cookies
-                              if c["name"] in ("tl_cpass", "cf_clearance")
-                          }
-                          print(f"Cookies capturados: {json.dumps(cookie_dict, indent=2)}")
-                          with open("token.json", "w") as f:
-                              json.dump(cookie_dict, f, indent=2)
-                          print("✓ token.json salvo")
-
-                          print("\n🧪 Testando API de capítulo com os cookies atuais...")
-                          api_response = await context.request.get(API_CHAPTER_URL)
-                          print(f"Status: {api_response.status}")
-                          body_text = await api_response.text()
-                          print(f"Body (primeiros 500 chars): {body_text[:500]}")
-
-                          if api_response.status == 200:
-                              print("✅ API respondeu 200! Cookies são suficientes!")
-                          else:
-                              print("❌ API não respondeu 200 – faltam headers ou outros fatores")
-
                   except Exception as e:
-                      print(f"⚠️ Erro durante navegação: {e}")
+                      print(f"⚠️ Erro: {e}")
                   finally:
                       await page.screenshot(path="debug_screenshot.png", full_page=True)
-                      print("📸 Screenshot salvo")
                       await browser.close()
+
+              if not collected:
+                  print("❌ Nenhum header capturado.")
+                  sys.exit(1)
+
+              # Salva os headers em ordem padronizada (minúsculas)
+              output = {
+                  "X-Toon-Verify": collected.get("x-toon-verify", ""),
+                  "Toonlivre-Pass": collected.get("toonlivre-pass", "")
+              }
+              with open("headers.json", "w") as f:
+                  json.dump(output, f, indent=2)
+              print("✓ headers.json salvo com sucesso")
 
           asyncio.run(main())
           EOF
 
       - name: Upload debug screenshot
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: debug-screenshot
           path: debug_screenshot.png
 
-      - name: Commit updated cookies
-        if: always()
+      - name: Commit updated headers
         run: |
-          if [ -f token.json ]; then
-            git config user.name "github-actions"
-            git config user.email "github-actions@github.com"
-            git add token.json
-            git diff --staged --quiet || git commit -m "chore: update cookies $(date +'%Y-%m-%d %H:%M')"
-            git push
-          else
-            echo "token.json não foi gerado – commit ignorado."
-          fi
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add headers.json
+          git diff --staged --quiet || git commit -m "chore: update app headers $(date +'%Y-%m-%d %H:%M')"
+          git push
