@@ -1,4 +1,4 @@
-name: Update Token (Cookies + AES Secrets)
+name: Auto-Capture Toonlivre Secrets
 
 on:
   schedule:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  update:
+  refresh:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -21,93 +21,104 @@ jobs:
           pip install playwright
           playwright install chromium
 
-      - name: Capture Data (Integrated Version)
+      - name: Automatic AES & Cookie Discovery
         run: |
           xvfb-run --auto-servernum python3 << 'EOF'
           import asyncio
           import json
           import sys
           import re
+          import time
           from playwright.async_api import async_playwright
 
-          CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
+          # URL onde a lógica de descriptografia é carregada
+          TARGET_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
 
           async def main():
-              print("🚀 Iniciando captura usando sua lógica de bypass...")
+              print("🔍 Iniciando busca automática de Segredos AES...")
               async with async_playwright() as p:
                   browser = await p.chromium.launch(
                       headless=False,
-                      args=[
-                          '--no-sandbox',
-                          '--disable-setuid-sandbox',
-                          '--disable-dev-shm-usage',
-                          '--disable-blink-features=AutomationControlled',
-                          '--window-size=1280,720',
-                      ]
+                      args=['--no-sandbox', '--disable-blink-features=AutomationControlled']
                   )
                   context = await browser.new_context(
-                      user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
-                      viewport={'width': 1280, 'height': 720},
-                      extra_http_headers={'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8'}
+                      user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                   )
                   page = await context.new_page()
 
                   try:
-                      print("📖 Acessando site...")
-                      await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
+                      print(f"🌐 Acessando {TARGET_URL}...")
+                      # O domcontentloaded é suficiente para carregar as tags de script
+                      await page.goto(TARGET_URL, wait_until='domcontentloaded', timeout=60000)
+                      
+                      aes_key = None
+                      xtoon = None
+                      tl_cpass = None
 
-                      print("⏳ Iniciando polling de tl_cpass e extração de AES...")
-                      for i in range(60): # 60 tentativas como no seu original
+                      # Loop de polling para garantir que o JS e os Cookies carreguem
+                      for i in range(45):
+                          # 1. Tentar capturar o cookie
                           cookies = await context.cookies()
-                          cookie_names = [c["name"] for c in cookies]
+                          tl_cpass = next((c['value'] for c in cookies if c['name'] == 'tl_cpass'), None)
 
-                          if "tl_cpass" in cookie_names:
-                              print("✅ tl_cpass encontrado!")
-                              tl = next(c["value"] for c in cookies if c["name"] == "tl_cpass")
-                              cf = next((c["value"] for c in cookies if c["name"] == "cf_clearance"), "")
+                          # 2. Identificar e analisar o arquivo JS de assets
+                          # O site usa Vite, então o arquivo começa com 'assets/index-'
+                          script_srcs = await page.evaluate("() => Array.from(document.querySelectorAll('script[src*=\"assets/index-\"]')).map(s => s.src)")
+                          
+                          if script_srcs:
+                              js_url = script_srcs[0]
+                              print(f"📂 Analisando arquivo JS: {js_url}")
                               
-                              # --- CAPTURA DA SENHA AES DENTRO DO SEU SUCESSO ---
-                              aes_key = "Magnesium-Strike-Astonish3393de932"
-                              xtoon = "manual_verify"
+                              # Baixa o conteúdo do JS para procurar a senha
+                              js_resp = await page.request.get(js_url)
+                              js_text = await js_resp.text()
                               
-                              try:
-                                  script_srcs = await page.evaluate("() => Array.from(document.querySelectorAll('script[src*=\"assets/index-\"]')).map(s => s.src)")
-                                  if script_srcs:
-                                      js_text = await (await page.request.get(script_srcs[0])).text()
-                                      k = re.search(r'([A-Z][a-z]+-[A-Z][a-z]+-[A-Z][a-z]+[a-f0-9]+)', js_text)
-                                      x = re.search(r'x-toon-verify":"([^"]+)"', js_text)
-                                      if k: aes_key = k.group(1)
-                                      if x: xtoon = x.group(1)
-                              except: pass
+                              # REGEX: Procura o padrão de 3 palavras separadas por hífen seguidas de caracteres hex
+                              # Exemplo: Magnesium-Strike-Astonish3393de932
+                              key_match = re.search(r'([A-Z][a-z]+-[A-Z][a-z]+-[A-Z][a-z]+[a-f0-9]+)', js_text)
+                              xtoon_match = re.search(r'x-toon-verify":"([^"]+)"', js_text)
+                              
+                              if key_match:
+                                  aes_key = key_match.group(1)
+                                  print(f"✨ Senha AES capturada: {aes_key}")
+                              
+                              if xtoon_match:
+                                  xtoon = xtoon_match.group(1)
 
-                              token_data = {
-                                  "tl_cpass": tl,
-                                  "cf_clearance": cf,
-                                  "aes_key": aes_key,
-                                  "x_toon_verify": xtoon
-                              }
+                          # Se pegou a senha e o cookie, pode parar
+                          if aes_key and tl_cpass:
+                              break
                               
-                              with open("token.json", "w") as f:
-                                  json.dump(token_data, f, indent=2)
-                              print(f"✓ token.json salvo com AES: {aes_key}")
-                              await browser.close()
-                              return
-
                           await asyncio.sleep(2)
-                          if i % 5 == 0: await page.reload(wait_until='domcontentloaded')
+
+                      if aes_key:
+                          token_data = {
+                              "tl_cpass": tl_cpass if tl_cpass else "cookie_not_found",
+                              "aes_key": aes_key,
+                              "x_toon_verify": xtoon if xtoon else "verify_not_found",
+                              "last_discovery": int(time.time()) # Força mudança no Git
+                          }
+                          
+                          with open("token.json", "w") as f:
+                              json.dump(token_data, f, indent=2)
+                          print("✅ Dados salvos com sucesso no token.json")
+                      else:
+                          print("❌ Não foi possível encontrar a senha AES no código-fonte.")
+                          sys.exit(1)
 
                   except Exception as e:
-                      print(f"⚠️ Erro: {e}")
+                      print(f"❌ Erro na automação: {e}")
+                      sys.exit(1)
                   finally:
                       await browser.close()
 
           asyncio.run(main())
           EOF
 
-      - name: Commit updated cookies
+      - name: Commit and Push to Repo
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add token.json
-          git diff --staged --quiet || git commit -m "chore: update tokens and aes $(date +'%Y-%m-%d %H:%M')"
+          git commit -m "chore: auto-update secrets $(date +'%Y-%m-%d %H:%M')"
           git push
