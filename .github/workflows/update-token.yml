@@ -1,71 +1,87 @@
-import asyncio
-import json
-import sys
-import re
-from playwright.async_api import async_playwright
+name: Refresh Tokens and AES Key
 
-# URL de teste para disparar a geração dos tokens
-CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
+on:
+  schedule:
+    - cron: '0 * * * *'   # Roda a cada 1 hora (evita ser bloqueado por excesso)
+  workflow_dispatch:      # Permite rodar manualmente clicando no botão
 
-async def main():
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        )
-        page = await context.new_page()
+permissions:
+  contents: write
 
-        print("🌐 Acessando Toonlivre para atualizar tokens...")
-        try:
-            await page.goto(CHAPTER_URL, wait_until='networkidle', timeout=60000)
-            # Pequeno scroll para garantir carregamento de scripts
-            await page.mouse.wheel(0, 500)
-            await asyncio.sleep(3)
-        except Exception as e:
-            print(f"❌ Erro ao acessar site: {e}")
-            sys.exit(1)
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-        # 1. Capturar Cookies
-        cookies = await context.cookies()
-        tl = next((c['value'] for c in cookies if c['name'] == 'tl_cpass'), "")
-        cf = next((c['value'] for c in cookies if c['name'] == 'cf_clearance'), "")
+      - name: Install dependencies
+        run: |
+          pip install playwright
+          playwright install chromium
 
-        # 2. Capturar Senha AES e X-Toon-Verify no JS principal
-        # O bundle do site começa com 'assets/index-'
-        script_srcs = await page.evaluate("() => Array.from(document.querySelectorAll('script[src*=\"assets/index-\"]')).map(s => s.src)")
-        
-        aes_key = ""
-        xtoon = ""
-        
-        if script_srcs:
-            print(f"🔎 Analisando bundle: {script_srcs[0]}")
-            response = await page.request.get(script_srcs[0])
-            js_text = await response.text()
-            
-            # Padrão capturado no DevTools: Magnesium-Strike-Astonish...
-            key_match = re.search(r'([A-Z][a-z]+-[A-Z][a-z]+-[A-Z][a-z]+[a-f0-9]+)', js_text)
-            xtoon_match = re.search(r'x-toon-verify":"([^"]+)"', js_text)
-            
-            if key_match:
-                aes_key = key_match.group(1)
-            if xtoon_match:
-                xtoon = xtoon_match.group(1)
+      - name: Capture Tokens and AES Key
+        run: |
+          python3 << 'EOF'
+          import asyncio
+          import json
+          import sys
+          import re
+          from playwright.async_api import async_playwright
 
-        if tl and aes_key:
-            token_data = {
-                'tl_cpass': tl,
-                'cf_clearance': cf,
-                'aes_key': aes_key,
-                'x_toon_verify': xtoon
-            }
-            with open('token.json', 'w') as f:
-                json.dump(token_data, f, indent=2)
-            print(f"✅ token.json atualizado! AES Key: {aes_key}")
-        else:
-            print("❌ Falha crítica: Dados incompletos.")
-            sys.exit(1)
+          CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
 
-        await browser.close()
+          async def main():
+              async with async_playwright() as p:
+                  browser = await p.chromium.launch(headless=True)
+                  context = await browser.new_context(
+                      user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                  )
+                  page = await context.new_page()
 
-if __name__ == "__main__":
-    asyncio.run(main())
+                  print("🌐 Acessando site...")
+                  try:
+                      await page.goto(CHAPTER_URL, wait_until='networkidle', timeout=60000)
+                      await asyncio.sleep(5) # Espera o JS assentar
+                  except Exception as e:
+                      print(f"Erro: {e}")
+                      sys.exit(1)
+
+                  cookies = await context.cookies()
+                  tl = next((c['value'] for c in cookies if c['name'] == 'tl_cpass'), "")
+                  cf = next((c['value'] for c in cookies if c['name'] == 'cf_clearance'), "")
+
+                  script_srcs = await page.evaluate("() => Array.from(document.querySelectorAll('script[src*=\"assets/index-\"]')).map(s => s.src)")
+                  
+                  aes_key = ""
+                  xtoon = ""
+                  
+                  if script_srcs:
+                      js_resp = await page.request.get(script_srcs[0])
+                      js_text = await js_resp.text()
+                      
+                      key_match = re.search(r'([A-Z][a-z]+-[A-Z][a-z]+-[A-Z][a-z]+[a-f0-9]+)', js_text)
+                      xtoon_match = re.search(r'x-toon-verify":"([^"]+)"', js_text)
+                      
+                      if key_match: aes_key = key_match.group(1)
+                      if xtoon_match: xtoon = xtoon_match.group(1)
+
+                  if tl and aes_key:
+                      with open('token.json', 'w') as f:
+                          json.dump({'tl_cpass': tl, 'cf_clearance': cf, 'aes_key': aes_key, 'x_toon_verify': xtoon}, f, indent=2)
+                      print(f"✅ Sucesso! Key: {aes_key}")
+                  else:
+                      print("❌ Falha ao capturar dados.")
+                      sys.exit(1)
+                  await browser.close()
+
+          asyncio.run(main())
+          EOF
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add token.json
+          git diff --staged --quiet || git commit -m "chore: refresh tokens"
+          git push
