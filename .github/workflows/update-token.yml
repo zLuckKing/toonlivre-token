@@ -1,70 +1,88 @@
-- name: Capture cookies via Playwright
-  run: |
-    xvfb-run --auto-servernum python3 << 'EOF'
-    import asyncio
-    import json
-    import sys
-    from playwright.async_api import async_playwright
+name: Refresh Cookies
 
-    CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # a cada 5 minutos
+  workflow_dispatch:
 
-    async def wait_for_tl_cpass(context, timeout=60):
-        """Espera o cookie tl_cpass aparecer, retorna True se encontrado."""
-        for i in range(timeout * 2):  # verifica a cada 0.5s
-            cookies = await context.cookies()
-            names = [c["name"] for c in cookies]
-            if "tl_cpass" in names:
-                return True
-            if i % 4 == 0:  # log a cada 2 segundos
-                print(f"⏳ Aguardando tl_cpass... cookies atuais: {names}")
-            await asyncio.sleep(0.5)
-        return False
+permissions:
+  contents: write
 
-    async def main():
-        print("🚀 Renovando cookies...")
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=False,
-                args=['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
-                      '--disable-blink-features=AutomationControlled','--window-size=1280,720']
-            )
-            context = await browser.new_context(
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
-                viewport={'width': 1280, 'height': 720},
-                extra_http_headers={'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'}
-            )
-            page = await context.new_page()
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-            success = False
-            try:
-                print("📖 Acessando capítulo...")
-                await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
-                success = await wait_for_tl_cpass(context, timeout=45)
+      - name: Install dependencies
+        run: |
+          sudo apt-get install -y xvfb
+          pip install playwright
+          playwright install chromium
 
-                if not success:
-                    print("🔄 Primeira tentativa falhou, recarregando página...")
-                    await page.reload(wait_until='domcontentloaded', timeout=60000)
-                    success = await wait_for_tl_cpass(context, timeout=45)
+      - name: Capture cookies
+        run: |
+          xvfb-run --auto-servernum python3 << 'EOF'
+          import asyncio, json, sys
+          from playwright.async_api import async_playwright
 
-                if not success:
-                    print("❌ tl_cpass não foi gerado após duas tentativas.")
-                    await page.screenshot(path="debug_screenshot.png")
-                    sys.exit(1)
+          CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
 
-                # Extrai cookies
-                all_cookies = await context.cookies()
-                cf = next((c["value"] for c in all_cookies if c["name"] == "cf_clearance"), "")
-                tl = next((c["value"] for c in all_cookies if c["name"] == "tl_cpass"), "")
-                with open("token.json", "w") as f:
-                    json.dump({"tl_cpass": tl, "cf_clearance": cf}, f, indent=2)
-                print("✅ token.json atualizado")
+          async def main():
+              async with async_playwright() as p:
+                  browser = await p.chromium.launch(
+                      headless=False,
+                      args=['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
+                            '--disable-blink-features=AutomationControlled','--window-size=1280,720']
+                  )
+                  context = await browser.new_context(
+                      user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
+                      viewport={'width':1280,'height':720},
+                      extra_http_headers={'Accept-Language':'pt-BR,pt;q=0.9,en-US;q=0.8'}
+                  )
+                  page = await context.new_page()
 
-            except Exception as e:
-                print(f"❌ Erro: {e}")
-                await page.screenshot(path="debug_screenshot.png")
-                sys.exit(1)
-            finally:
-                await browser.close()
+                  # Espera até 90s pelo tl_cpass
+                  for attempt in range(3):
+                      print(f"📖 Tentativa {attempt+1}...")
+                      try:
+                          await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
+                      except:
+                          pass
+                      for _ in range(60):   # 60 verificações a cada 1.5s = 90s
+                          cookies = await context.cookies()
+                          names = [c['name'] for c in cookies]
+                          if 'tl_cpass' in names:
+                              cf = next(c['value'] for c in cookies if c['name']=='cf_clearance')
+                              tl = next(c['value'] for c in cookies if c['name']=='tl_cpass')
+                              with open('token.json','w') as f:
+                                  json.dump({'tl_cpass':tl,'cf_clearance':cf}, f, indent=2)
+                              print('✅ token.json salvo')
+                              await browser.close()
+                              return
+                          await asyncio.sleep(1.5)
+                      print('🔄 Recarregando...')
+                      await page.reload(wait_until='domcontentloaded', timeout=60000)
 
-    asyncio.run(main())
-    EOF
+                  print('❌ Falhou após 3 tentativas')
+                  await page.screenshot(path='failure.png')
+                  sys.exit(1)
+
+          asyncio.run(main())
+          EOF
+
+      - name: Upload failure screenshot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-screenshot
+          path: failure.png
+
+      - name: Commit token
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add token.json
+          git diff --staged --quiet || git commit -m "chore: refresh cookies"
+          git push
