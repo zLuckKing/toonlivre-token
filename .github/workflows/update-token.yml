@@ -1,88 +1,71 @@
-name: Refresh Cookies
+import asyncio
+import json
+import sys
+import re
+from playwright.async_api import async_playwright
 
-on:
-  schedule:
-    - cron: '*/5 * * * *'   # a cada 5 minutos
-  workflow_dispatch:
+# URL de teste para disparar a geração dos tokens
+CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
 
-permissions:
-  contents: write
+async def main():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        )
+        page = await context.new_page()
 
-jobs:
-  refresh:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+        print("🌐 Acessando Toonlivre para atualizar tokens...")
+        try:
+            await page.goto(CHAPTER_URL, wait_until='networkidle', timeout=60000)
+            # Pequeno scroll para garantir carregamento de scripts
+            await page.mouse.wheel(0, 500)
+            await asyncio.sleep(3)
+        except Exception as e:
+            print(f"❌ Erro ao acessar site: {e}")
+            sys.exit(1)
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get install -y xvfb
-          pip install playwright
-          playwright install chromium
+        # 1. Capturar Cookies
+        cookies = await context.cookies()
+        tl = next((c['value'] for c in cookies if c['name'] == 'tl_cpass'), "")
+        cf = next((c['value'] for c in cookies if c['name'] == 'cf_clearance'), "")
 
-      - name: Capture cookies
-        run: |
-          xvfb-run --auto-servernum python3 << 'EOF'
-          import asyncio, json, sys
-          from playwright.async_api import async_playwright
+        # 2. Capturar Senha AES e X-Toon-Verify no JS principal
+        # O bundle do site começa com 'assets/index-'
+        script_srcs = await page.evaluate("() => Array.from(document.querySelectorAll('script[src*=\"assets/index-\"]')).map(s => s.src)")
+        
+        aes_key = ""
+        xtoon = ""
+        
+        if script_srcs:
+            print(f"🔎 Analisando bundle: {script_srcs[0]}")
+            response = await page.request.get(script_srcs[0])
+            js_text = await response.text()
+            
+            # Padrão capturado no DevTools: Magnesium-Strike-Astonish...
+            key_match = re.search(r'([A-Z][a-z]+-[A-Z][a-z]+-[A-Z][a-z]+[a-f0-9]+)', js_text)
+            xtoon_match = re.search(r'x-toon-verify":"([^"]+)"', js_text)
+            
+            if key_match:
+                aes_key = key_match.group(1)
+            if xtoon_match:
+                xtoon = xtoon_match.group(1)
 
-          CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
+        if tl and aes_key:
+            token_data = {
+                'tl_cpass': tl,
+                'cf_clearance': cf,
+                'aes_key': aes_key,
+                'x_toon_verify': xtoon
+            }
+            with open('token.json', 'w') as f:
+                json.dump(token_data, f, indent=2)
+            print(f"✅ token.json atualizado! AES Key: {aes_key}")
+        else:
+            print("❌ Falha crítica: Dados incompletos.")
+            sys.exit(1)
 
-          async def main():
-              async with async_playwright() as p:
-                  browser = await p.chromium.launch(
-                      headless=False,
-                      args=['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
-                            '--disable-blink-features=AutomationControlled','--window-size=1280,720']
-                  )
-                  context = await browser.new_context(
-                      user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
-                      viewport={'width':1280,'height':720},
-                      extra_http_headers={'Accept-Language':'pt-BR,pt;q=0.9,en-US;q=0.8'}
-                  )
-                  page = await context.new_page()
+        await browser.close()
 
-                  # Espera até 90s pelo tl_cpass
-                  for attempt in range(3):
-                      print(f"📖 Tentativa {attempt+1}...")
-                      try:
-                          await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
-                      except:
-                          pass
-                      for _ in range(60):   # 60 verificações a cada 1.5s = 90s
-                          cookies = await context.cookies()
-                          names = [c['name'] for c in cookies]
-                          if 'tl_cpass' in names:
-                              cf = next(c['value'] for c in cookies if c['name']=='cf_clearance')
-                              tl = next(c['value'] for c in cookies if c['name']=='tl_cpass')
-                              with open('token.json','w') as f:
-                                  json.dump({'tl_cpass':tl,'cf_clearance':cf}, f, indent=2)
-                              print('✅ token.json salvo')
-                              await browser.close()
-                              return
-                          await asyncio.sleep(1.5)
-                      print('🔄 Recarregando...')
-                      await page.reload(wait_until='domcontentloaded', timeout=60000)
-
-                  print('❌ Falhou após 3 tentativas')
-                  await page.screenshot(path='failure.png')
-                  sys.exit(1)
-
-          asyncio.run(main())
-          EOF
-
-      - name: Upload failure screenshot
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: failure-screenshot
-          path: failure.png
-
-      - name: Commit token
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add token.json
-          git diff --staged --quiet || git commit -m "chore: refresh cookies"
-          git push
+if __name__ == "__main__":
+    asyncio.run(main())
