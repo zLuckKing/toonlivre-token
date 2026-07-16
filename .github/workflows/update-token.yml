@@ -23,45 +23,46 @@ jobs:
 
       - name: Capture token
         run: |
-          python3 -c "
+          python3 << 'EOF'
           import asyncio, json, os, re
           from playwright.async_api import async_playwright
-          
+
           async def main():
+              print("🚀 Iniciando captura...")
               async with async_playwright() as p:
-                  browser = await p.chromium.launch(args=['--no-sandbox'])
+                  browser = await p.chromium.launch(headless=True)
                   context = await browser.new_context(user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36')
                   page = await context.new_page()
-                  
-                  # Captura do JS
-                  index_js_url = None
-                  page.on('response', lambda r: globals().update(index_js_url=r.url) if '/assets/index-' in r.url and r.url.endswith('.js') else None)
-                  
+
                   try:
-                      await page.goto('https://toonlivre.net', wait_until='networkidle', timeout=30000)
-                      await page.goto('https://toonlivre.net/guerreiro-da-espada-mental/40', wait_until='domcontentloaded', timeout=60000)
-                  except: pass
-                  
+                      print("🔗 Acessando página...")
+                      # Navega e espera o network idle
+                      response = await page.goto('https://toonlivre.net/guerreiro-da-espada-mental/40', wait_until='networkidle', timeout=60000)
+                      print(f"Status da página: {response.status}")
+                  except Exception as e:
+                      print(f"❌ Erro na navegação: {e}")
+
                   cookies = await context.cookies()
-                  cf = next((c['value'] for c in cookies if c['name'] == 'cf_clearance'), '')
-                  tl = next((c['value'] for c in cookies if c['name'] == 'tl_cpass'), '')
+                  cf = next((c['value'] for c in cookies if c['name'] == 'cf_clearance'), "")
+                  tl = next((c['value'] for c in cookies if c['name'] == 'tl_cpass'), "")
                   
-                  aes, v = '', 'qedh6j2musffc129c30eqt'
-                  if 'index_js_url' in globals():
-                      resp = await context.request.get(globals()['index_js_url'])
-                      txt = await resp.text()
-                      m = re.search(r'([A-Z][a-z]+-[A-Z][a-z]+-[A-Z][a-z]+[a-f0-9]{6,})', txt)
-                      if m: aes = m.group(1)
-                      m2 = re.search(r'[\'\"]x-toon-verify[\'\"]\s*,\s*[\'\"]([a-f0-9]+)[\'\"]', txt)
-                      if m2: v = m2.group(1)
+                  print(f"🔍 Cookies encontrados - cf_clearance: {'OK' if cf else 'VAZIO'}, tl_cpass: {'OK' if tl else 'VAZIO'}")
+                  
+                  # Salva mesmo que vazio para podermos debugar o que o arquivo contém
+                  data = {'toonlivre-pass': tl, 'cf_clearance': cf}
+                  with open('token.json', 'w') as f:
+                      json.dump(data, f, indent=2)
+                  print("💾 Arquivo token.json gerado.")
                   
                   await browser.close()
-                  if tl:
-                      with open('token.json', 'w') as f:
-                          json.dump({'toonlivre-pass': tl, 'cf_clearance': cf, 'x-toon-verify': v, 'aes_key': aes}, f, indent=2)
-          
+
           asyncio.run(main())
-          "
+          EOF
+
+      - name: Debug Output
+        run: |
+          echo "Conteúdo do token.json:"
+          cat token.json
 
       - name: Commit token
         run: |
