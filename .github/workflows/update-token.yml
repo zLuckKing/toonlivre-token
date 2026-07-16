@@ -17,7 +17,6 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get install -y xvfb
           pip install playwright
           playwright install chromium
 
@@ -29,19 +28,18 @@ jobs:
 
           async def main():
               async with async_playwright() as p:
-                  browser = await p.chromium.launch(headless=False, args=['--no-sandbox'])
+                  # Alterado para headless=True para funcionar no servidor do GitHub
+                  browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
                   context = await browser.new_context(user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36')
                   page = await context.new_page()
 
                   print("🚀 Acessando...")
-                  # Acessando a página para disparar os cookies
                   await page.goto('https://toonlivre.net/carrasco/67', wait_until='networkidle')
                   await asyncio.sleep(5)
                   
                   cookies = await context.cookies()
                   
-                  # Filtramos pelo novo cookie toon_v e pelo cf_clearance
-                  # Mapeamos 'toon_v' para 'toonlivre-pass' para manter a compatibilidade
+                  # Filtramos pelos cookies necessários
                   data = {}
                   for c in cookies:
                       if c['name'] == 'toon_v':
@@ -49,10 +47,15 @@ jobs:
                       elif c['name'] == 'cf_clearance':
                           data['cf_clearance'] = c['value']
                   
-                  with open("token.json", "w") as f:
-                      json.dump(data, f, indent=2)
-                  
-                  print(f"💾 Dados salvos: {data}")
+                  # Só salva se encontrar o toon_v
+                  if 'toonlivre-pass' in data:
+                      with open("token.json", "w") as f:
+                          json.dump(data, f, indent=2)
+                      print(f"💾 Dados salvos com sucesso: {data}")
+                  else:
+                      print("⚠️ Erro: toon_v não encontrado!")
+                      exit(1)
+                      
                   await browser.close()
 
           asyncio.run(main())
