@@ -28,24 +28,29 @@ jobs:
 
           async def main():
               async with async_playwright() as p:
-                  browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
-                  # User-agent mais robusto para simular navegação real
-                  context = await browser.new_context(user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36')
+                  # Adicionamos mais argumentos para tentar burlar detecção de bot
+                  browser = await p.chromium.launch(headless=True, args=[
+                      '--no-sandbox', 
+                      '--disable-setuid-sandbox',
+                      '--disable-blink-features=AutomationControlled' # Esconde que é automação
+                  ])
+                  
+                  context = await browser.new_context(
+                      user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
+                      viewport={'width': 1280, 'height': 720}
+                  )
+                  
                   page = await context.new_page()
 
-                  print("🚀 Acessando o site...")
-                  # Aumentando o timeout para 60 segundos
+                  print("🚀 Tentando acesso com bypass de bot...")
                   try:
-                      # Navega para a página principal primeiro para resolver DNS e cookies
-                      await page.goto('https://toonlivre.net', wait_until='domcontentloaded', timeout=60000)
-                      await asyncio.sleep(5)
-                      
-                      # Navega para a página específica
-                      await page.goto('https://toonlivre.net/carrasco/67', wait_until='networkidle', timeout=60000)
-                      await asyncio.sleep(5)
+                      # Usamos uma estratégia de esperar o tráfego de rede
+                      response = await page.goto('https://toonlivre.net', wait_until='networkidle', timeout=60000)
+                      print(f"Status da página: {response.status}")
                   except Exception as e:
-                      print(f"❌ Erro na navegação: {e}")
-                      # Tenta capturar o que for possível mesmo com erro
+                      print(f"❌ Erro crítico de rede: {e}")
+                      # Tenta listar os erros de rede mais detalhados
+                      print("Dica: Se o erro for DNS, o site está bloqueando o IP da AWS/GitHub.")
                   
                   cookies = await context.cookies()
                   data = {}
@@ -58,11 +63,9 @@ jobs:
                   if 'toonlivre-pass' in data:
                       with open("token.json", "w") as f:
                           json.dump(data, f, indent=2)
-                      print(f"✅ Sucesso! Dados: {data}")
+                      print(f"✅ Sucesso! Token capturado.")
                   else:
-                      print("⚠️ Erro: toon_v não encontrado nos cookies.")
-                      # Lista os cookies encontrados para debug
-                      print(f"Cookies encontrados: {[c['name'] for c in cookies]}")
+                      print("⚠️ Falha: toon_v vazio.")
                       exit(1)
                       
                   await browser.close()
@@ -75,5 +78,5 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add token.json
-          git diff --staged --quiet || (git commit -m "update cookies (toon_v)" && git push)
+          git diff --staged --quiet || (git commit -m "update cookies" && git push)
           
