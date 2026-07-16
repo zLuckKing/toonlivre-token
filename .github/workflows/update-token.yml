@@ -1,4 +1,4 @@
-name: Update Token
+Name: Update Token
 
 on:
   schedule:
@@ -65,113 +65,49 @@ jobs:
                   page.on('response', handle_response)
 
                   try:
-                      print("🏠 Acessando home...")
                       await page.goto('https://toonlivre.net', wait_until='networkidle', timeout=30000)
-                  except Exception:
-                      pass
-
-                  try:
-                      print("📖 Acessando capítulo...")
                       await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
-
-                      print("⏳ Aguardando tl_cpass...")
-                      tl_cpass = None
-                      for i in range(30):
-                          cookies = await context.cookies()
-                          for c in cookies:
-                              if c['name'] == 'tl_cpass':
-                                  tl_cpass = c['value']
-                                  break
-                          if tl_cpass:
-                              print(f"✓ tl_cpass capturado na tentativa {i+1}")
-                              break
-                          await asyncio.sleep(1)
-
                   except Exception as e:
-                      print(f"Erro: {e}")
+                      print(f"Erro na navegação: {e}")
 
-                  # Captura cf_clearance e x-toon-verify
                   cookies = await context.cookies()
-                  cf_clearance = None
-                  tl_cpass = None
-                  for c in cookies:
-                      if c['name'] == 'cf_clearance':
-                          cf_clearance = c['value']
-                      if c['name'] == 'tl_cpass':
-                          tl_cpass = c['value']
+                  cf_clearance = next((c['value'] for c in cookies if c['name'] == 'cf_clearance'), "")
+                  tl_cpass = next((c['value'] for c in cookies if c['name'] == 'tl_cpass'), "")
 
                   print(f"cf_clearance: {'✓' if cf_clearance else '❌'}")
                   print(f"tl_cpass: {'✓' if tl_cpass else '❌'}")
-                  print(f"index.js URL: {index_js_url}")
 
-                  # Baixa o JS e extrai a senha AES e x-toon-verify
-                  aes_key = None
-                  x_toon_verify = None
+                  aes_key = ""
+                  x_toon_verify = "qedh6j2musffc129c30eqt"
+
                   if index_js_url:
                       try:
                           js_response = await context.request.get(index_js_url)
                           js_text = await js_response.text()
-
-                          # Extrai senha AES
                           aes_match = re.search(r'([A-Z][a-z]+-[A-Z][a-z]+-[A-Z][a-z]+[a-f0-9]{6,})', js_text)
-                          if aes_match:
-                              aes_key = aes_match.group(1)
-                              print(f"✓ AES key: {aes_key}")
-                          else:
-                              print("❌ AES key não encontrada")
-
-                          # Extrai x-toon-verify
+                          if aes_match: aes_key = aes_match.group(1)
+                          
                           verify_match = re.search(r'["\']x-toon-verify["\']\s*,\s*["\']([a-f0-9]+)["\']', js_text)
-                          if verify_match:
-                              x_toon_verify = verify_match.group(1)
-                              print(f"✓ X-Toon-Verify: {x_toon_verify}")
-                          else:
-                              # fallback
-                              x_toon_verify = "qedh6j2musffc129c30eqt"
-                              print(f"⚠️ X-Toon-Verify não encontrado, usando fallback: {x_toon_verify}")
-
+                          if verify_match: x_toon_verify = verify_match.group(1)
                       except Exception as e:
                           print(f"Erro ao baixar JS: {e}")
 
                   await browser.close()
 
                   if not tl_cpass:
-                      print("❌ tl_cpass não capturado — não fazendo commit")
+                      print("❌ tl_cpass não capturado")
                       return
 
-                  if not aes_key:
-                      print("⚠️ AES key não encontrada — usando valor atual do token.json")
-                      current = {}
-                      if os.path.exists('token.json'):
-                          with open('token.json') as f:
-                              current = json.load(f)
-                      aes_key = current.get('aes_key', '')
-
-                  # Monta o token
                   token = {
                       "toonlivre-pass": tl_cpass,
-                      "x-toon-verify": x_toon_verify or "qedh6j2musffc129c30eqt",
+                      "cf_clearance": cf_clearance,
+                      "x-toon-verify": x_toon_verify,
                       "aes_key": aes_key,
                   }
 
-                  # Compara com token atual
-                  current_token = {}
-                  if os.path.exists('token.json'):
-                      with open('token.json') as f:
-                          try:
-                              current_token = json.load(f)
-                          except:
-                              pass
-
-                  if current_token == token:
-                      print("✓ Token não mudou. Nada para atualizar.")
-                      return
-
                   with open('token.json', 'w') as f:
                       json.dump(token, f, indent=2)
-                  print(f"✓ Token atualizado!")
-                  print(f"  Anterior: {current_token}")
-                  print(f"  Novo: {token}")
+                  print("✓ Token atualizado com sucesso!")
 
           asyncio.run(main())
           EOF
