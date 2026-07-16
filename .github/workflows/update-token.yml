@@ -18,57 +18,57 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get install -y xvfb
-          pip install playwright requests
+          pip install playwright
           playwright install chromium
 
       - name: Capture token
         run: |
           python3 << 'EOF'
-          import asyncio, json, os, re
+          import asyncio, json, re
           from playwright.async_api import async_playwright
 
           async def main():
-              print("🚀 Iniciando captura...")
               async with async_playwright() as p:
-                  browser = await p.chromium.launch(headless=True)
-                  context = await browser.new_context(user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36')
+                  # Adicionamos argumentos para tentar contornar bloqueios de rede/DNS
+                  browser = await p.chromium.launch(
+                      headless=True, 
+                      args=['--no-sandbox', '--disable-setuid-sandbox', '--ignore-certificate-errors']
+                  )
+                  context = await browser.new_context(
+                      user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
+                  )
                   page = await context.new_page()
 
                   try:
-                      print("🔗 Acessando página...")
-                      # Navega e espera o network idle
-                      response = await page.goto('https://toonlivre.net/guerreiro-da-espada-mental/40', wait_until='networkidle', timeout=60000)
-                      print(f"Status da página: {response.status}")
+                      print("🔗 Acessando Toonlivre...")
+                      await page.goto('https://toonlivre.net', wait_until='networkidle', timeout=60000)
+                      
+                      # Aguarda o cookie de sessão ser gerado
+                      await asyncio.sleep(5) 
+                      
+                      cookies = await context.cookies()
+                      cf = next((c['value'] for c in cookies if c['name'] == 'cf_clearance'), "")
+                      tl = next((c['value'] for c in cookies if c['name'] == 'tl_cpass'), "")
+                      
+                      print(f"DEBUG: cf_clearance={'OK' if cf else 'VAZIO'}, tl_cpass={'OK' if tl else 'VAZIO'}")
+                      
+                      # Salva o resultado
+                      with open('token.json', 'w') as f:
+                          json.dump({'toonlivre-pass': tl, 'cf_clearance': cf, 'x-toon-verify': 'qedh6j2musffc129c30eqt', 'aes_key': ''}, f, indent=2)
+                  
                   except Exception as e:
-                      print(f"❌ Erro na navegação: {e}")
-
-                  cookies = await context.cookies()
-                  cf = next((c['value'] for c in cookies if c['name'] == 'cf_clearance'), "")
-                  tl = next((c['value'] for c in cookies if c['name'] == 'tl_cpass'), "")
-                  
-                  print(f"🔍 Cookies encontrados - cf_clearance: {'OK' if cf else 'VAZIO'}, tl_cpass: {'OK' if tl else 'VAZIO'}")
-                  
-                  # Salva mesmo que vazio para podermos debugar o que o arquivo contém
-                  data = {'toonlivre-pass': tl, 'cf_clearance': cf}
-                  with open('token.json', 'w') as f:
-                      json.dump(data, f, indent=2)
-                  print("💾 Arquivo token.json gerado.")
+                      print(f"❌ Erro crítico: {e}")
                   
                   await browser.close()
 
           asyncio.run(main())
           EOF
 
-      - name: Debug Output
-        run: |
-          echo "Conteúdo do token.json:"
-          cat token.json
-
       - name: Commit token
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add token.json
-          git diff --staged --quiet || git commit -m "update token"
-          git push
+          # Só commita se houver mudança real
+          git diff --staged --quiet || (git commit -m "update token" && git push)
           
