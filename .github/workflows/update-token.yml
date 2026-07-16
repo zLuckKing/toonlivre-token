@@ -1,4 +1,4 @@
-name: Update Token
+name: Update Token (debug + API test)
 
 on:
   schedule:
@@ -19,56 +19,131 @@ jobs:
         run: |
           sudo apt-get install -y xvfb
           pip install playwright
+          python -c "from importlib.metadata import version; print('Playwright version:', version('playwright'))"
           playwright install chromium
 
-      - name: Capture token
+      - name: Debug & capture cookies + API test
         run: |
-          python3 << 'EOF'
-          import asyncio, json, re
+          xvfb-run --auto-servernum python3 << 'EOF'
+          import asyncio
+          import json
+          import sys
           from playwright.async_api import async_playwright
 
+          CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
+          API_CHAPTER_URL = "https://toonlivre.net/api/mangas/obra-d32eb564/chapters/cap-a064a237-40"
+
           async def main():
+              print("🚀 Modo debug: capturando cookies + teste da API de capítulo")
               async with async_playwright() as p:
-                  # Adicionamos argumentos para tentar contornar bloqueios de rede/DNS
                   browser = await p.chromium.launch(
-                      headless=True, 
-                      args=['--no-sandbox', '--disable-setuid-sandbox', '--ignore-certificate-errors']
+                      headless=False,
+                      args=[
+                          '--no-sandbox',
+                          '--disable-setuid-sandbox',
+                          '--disable-dev-shm-usage',
+                          '--disable-blink-features=AutomationControlled',
+                          '--window-size=1280,720',
+                      ]
                   )
                   context = await browser.new_context(
-                      user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
+                      user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
+                      viewport={'width': 1280, 'height': 720},
+                      extra_http_headers={
+                          'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+                      }
                   )
                   page = await context.new_page()
 
+                  page.on('request', lambda req: print(f"REQ: {req.method} {req.url}"))
+                  async def log_response(response):
+                      print(f"RES: {response.status} {response.url}")
+                      if 'set-cookie' in response.headers:
+                          print("=" * 60)
+                          print(f"SET-COOKIE from: {response.url}")
+                          print(response.headers['set-cookie'])
+                          print("=" * 60)
+                  page.on('response', log_response)
+
                   try:
-                      print("🔗 Acessando Toonlivre...")
-                      await page.goto('https://toonlivre.net', wait_until='networkidle', timeout=60000)
-                      
-                      # Aguarda o cookie de sessão ser gerado
-                      await asyncio.sleep(5) 
-                      
-                      cookies = await context.cookies()
-                      cf = next((c['value'] for c in cookies if c['name'] == 'cf_clearance'), "")
-                      tl = next((c['value'] for c in cookies if c['name'] == 'tl_cpass'), "")
-                      
-                      print(f"DEBUG: cf_clearance={'OK' if cf else 'VAZIO'}, tl_cpass={'OK' if tl else 'VAZIO'}")
-                      
-                      # Salva o resultado
-                      with open('token.json', 'w') as f:
-                          json.dump({'toonlivre-pass': tl, 'cf_clearance': cf, 'x-toon-verify': 'qedh6j2musffc129c30eqt', 'aes_key': ''}, f, indent=2)
-                  
+                      print("📖 Acessando capítulo...")
+                      await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
+
+                      print("⏳ Polling de cookies (até 30 tentativas, intervalo 1s)...")
+                      tl_cpass_found = False
+                      for i in range(30):
+                          cookies = await context.cookies()
+                          cookie_names = [c["name"] for c in cookies]
+                          print(f"Tentativa {i+1}: cookies = {cookie_names}")
+
+                          if "tl_cpass" in cookie_names:
+                              print("✓ tl_cpass apareceu!")
+                              tl_cpass_found = True
+                              break
+
+                          await asyncio.sleep(1)
+
+                      if not tl_cpass_found:
+                          print("❌ tl_cpass não apareceu após 30 segundos de polling")
+                          cookies = await context.cookies()
+                          cookie_dict = {
+                              c["name"]: c["value"]
+                              for c in cookies
+                              if c["name"] in ("tl_cpass", "cf_clearance")
+                          }
+                          if cookie_dict:
+                              with open("token.json", "w") as f:
+                                  json.dump(cookie_dict, f, indent=2)
+                              print("Apenas cf_clearance encontrado (tl_cpass ausente)")
+                      else:
+                          cookies = await context.cookies()
+                          cookie_dict = {
+                              c["name"]: c["value"]
+                              for c in cookies
+                              if c["name"] in ("tl_cpass", "cf_clearance")
+                          }
+                          print(f"Cookies capturados: {json.dumps(cookie_dict, indent=2)}")
+                          with open("token.json", "w") as f:
+                              json.dump(cookie_dict, f, indent=2)
+                          print("✓ token.json salvo")
+
+                          print("\n🧪 Testando API de capítulo com os cookies atuais...")
+                          api_response = await context.request.get(API_CHAPTER_URL)
+                          print(f"Status: {api_response.status}")
+                          body_text = await api_response.text()
+                          print(f"Body (primeiros 500 chars): {body_text[:500]}")
+
+                          if api_response.status == 200:
+                              print("✅ API respondeu 200! Cookies são suficientes!")
+                          else:
+                              print("❌ API não respondeu 200 – faltam headers ou outros fatores")
+
                   except Exception as e:
-                      print(f"❌ Erro crítico: {e}")
-                  
-                  await browser.close()
+                      print(f"⚠️ Erro durante navegação: {e}")
+                  finally:
+                      await page.screenshot(path="debug_screenshot.png", full_page=True)
+                      print("📸 Screenshot salvo")
+                      await browser.close()
 
           asyncio.run(main())
           EOF
 
-      - name: Commit token
+      - name: Upload debug screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshot
+          path: debug_screenshot.png
+
+      - name: Commit updated cookies
+        if: always()
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add token.json
-          # Só commita se houver mudança real
-          git diff --staged --quiet || (git commit -m "update token" && git push)
-          
+          if [ -f token.json ]; then
+            git config user.name "github-actions"
+            git config user.email "github-actions@github.com"
+            git add token.json
+            git diff --staged --quiet || git commit -m "chore: update cookies $(date +'%Y-%m-%d %H:%M')"
+            git push
+          else
+            echo "token.json não foi gerado – commit ignorado."
+          fi
