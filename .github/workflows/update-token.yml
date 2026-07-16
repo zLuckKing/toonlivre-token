@@ -1,4 +1,4 @@
-Name: Update Token
+name: Update Token
 
 on:
   schedule:
@@ -23,99 +23,51 @@ jobs:
 
       - name: Capture token
         run: |
-          xvfb-run --auto-servernum python3 << 'EOF'
-          import asyncio
-          import json
-          import os
-          import re
+          python3 -c "
+          import asyncio, json, os, re
           from playwright.async_api import async_playwright
-
-          CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
-
+          
           async def main():
-              print("🚀 Iniciando captura...")
-
               async with async_playwright() as p:
-                  browser = await p.chromium.launch(
-                      headless=False,
-                      args=[
-                          '--no-sandbox',
-                          '--disable-setuid-sandbox',
-                          '--disable-dev-shm-usage',
-                          '--disable-blink-features=AutomationControlled',
-                          '--window-size=1280,720',
-                      ]
-                  )
-                  context = await browser.new_context(
-                      user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
-                      viewport={'width': 1280, 'height': 720},
-                      extra_http_headers={
-                          'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-                      }
-                  )
-
+                  browser = await p.chromium.launch(args=['--no-sandbox'])
+                  context = await browser.new_context(user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36')
                   page = await context.new_page()
+                  
+                  # Captura do JS
                   index_js_url = None
-
-                  async def handle_response(response):
-                      nonlocal index_js_url
-                      if '/assets/index-' in response.url and response.url.endswith('.js'):
-                          index_js_url = response.url
-
-                  page.on('response', handle_response)
-
+                  page.on('response', lambda r: globals().update(index_js_url=r.url) if '/assets/index-' in r.url and r.url.endswith('.js') else None)
+                  
                   try:
                       await page.goto('https://toonlivre.net', wait_until='networkidle', timeout=30000)
-                      await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
-                  except Exception as e:
-                      print(f"Erro na navegação: {e}")
-
+                      await page.goto('https://toonlivre.net/guerreiro-da-espada-mental/40', wait_until='domcontentloaded', timeout=60000)
+                  except: pass
+                  
                   cookies = await context.cookies()
-                  cf_clearance = next((c['value'] for c in cookies if c['name'] == 'cf_clearance'), "")
-                  tl_cpass = next((c['value'] for c in cookies if c['name'] == 'tl_cpass'), "")
-
-                  print(f"cf_clearance: {'✓' if cf_clearance else '❌'}")
-                  print(f"tl_cpass: {'✓' if tl_cpass else '❌'}")
-
-                  aes_key = ""
-                  x_toon_verify = "qedh6j2musffc129c30eqt"
-
-                  if index_js_url:
-                      try:
-                          js_response = await context.request.get(index_js_url)
-                          js_text = await js_response.text()
-                          aes_match = re.search(r'([A-Z][a-z]+-[A-Z][a-z]+-[A-Z][a-z]+[a-f0-9]{6,})', js_text)
-                          if aes_match: aes_key = aes_match.group(1)
-                          
-                          verify_match = re.search(r'["\']x-toon-verify["\']\s*,\s*["\']([a-f0-9]+)["\']', js_text)
-                          if verify_match: x_toon_verify = verify_match.group(1)
-                      except Exception as e:
-                          print(f"Erro ao baixar JS: {e}")
-
+                  cf = next((c['value'] for c in cookies if c['name'] == 'cf_clearance'), '')
+                  tl = next((c['value'] for c in cookies if c['name'] == 'tl_cpass'), '')
+                  
+                  aes, v = '', 'qedh6j2musffc129c30eqt'
+                  if 'index_js_url' in globals():
+                      resp = await context.request.get(globals()['index_js_url'])
+                      txt = await resp.text()
+                      m = re.search(r'([A-Z][a-z]+-[A-Z][a-z]+-[A-Z][a-z]+[a-f0-9]{6,})', txt)
+                      if m: aes = m.group(1)
+                      m2 = re.search(r'[\'\"]x-toon-verify[\'\"]\s*,\s*[\'\"]([a-f0-9]+)[\'\"]', txt)
+                      if m2: v = m2.group(1)
+                  
                   await browser.close()
-
-                  if not tl_cpass:
-                      print("❌ tl_cpass não capturado")
-                      return
-
-                  token = {
-                      "toonlivre-pass": tl_cpass,
-                      "cf_clearance": cf_clearance,
-                      "x-toon-verify": x_toon_verify,
-                      "aes_key": aes_key,
-                  }
-
-                  with open('token.json', 'w') as f:
-                      json.dump(token, f, indent=2)
-                  print("✓ Token atualizado com sucesso!")
-
+                  if tl:
+                      with open('token.json', 'w') as f:
+                          json.dump({'toonlivre-pass': tl, 'cf_clearance': cf, 'x-toon-verify': v, 'aes_key': aes}, f, indent=2)
+          
           asyncio.run(main())
-          EOF
+          "
 
       - name: Commit token
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add token.json
-          git diff --staged --quiet || git commit -m "chore: update token $(date +'%Y-%m-%d %H:%M')"
+          git diff --staged --quiet || git commit -m "update token"
           git push
+          
