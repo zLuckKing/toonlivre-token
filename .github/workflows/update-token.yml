@@ -1,15 +1,15 @@
-name: Auto-Capture Secrets (Bypass DNS)
+name: Update Token
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '0 */2 * * *'
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  refresh:
+  update:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -18,98 +18,168 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get install -y xvfb
-          pip install playwright
+          pip install playwright requests
           playwright install chromium
 
-      - name: Automatic AES Discovery
+      - name: Capture token
         run: |
           xvfb-run --auto-servernum python3 << 'EOF'
           import asyncio
           import json
-          import sys
+          import os
           import re
-          import time
           from playwright.async_api import async_playwright
 
-          # Usamos o IP direto para pular o DNS do GitHub
-          IP_SITE = "104.21.35.220"
-          TARGET_URL = f"https://{IP_SITE}/guerreiro-da-espada-mental/40"
+          CHAPTER_URL = "https://toonlivre.net/guerreiro-da-espada-mental/40"
 
           async def main():
-              print(f"🚀 Iniciando captura via IP direto: {IP_SITE}")
+              print("🚀 Iniciando captura...")
+
               async with async_playwright() as p:
-                  # Ignoramos erros de certificado causados pelo uso do IP na URL
                   browser = await p.chromium.launch(
-                      headless=False, 
-                      args=['--no-sandbox', '--ignore-certificate-errors']
+                      headless=False,
+                      args=[
+                          '--no-sandbox',
+                          '--disable-setuid-sandbox',
+                          '--disable-dev-shm-usage',
+                          '--disable-blink-features=AutomationControlled',
+                          '--window-size=1280,720',
+                      ]
                   )
                   context = await browser.new_context(
-                      user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                      extra_http_headers={'Host': 'toonlivre.net'}
+                      user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
+                      viewport={'width': 1280, 'height': 720},
+                      extra_http_headers={
+                          'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+                      }
                   )
+
                   page = await context.new_page()
+                  index_js_url = None
+
+                  async def handle_response(response):
+                      nonlocal index_js_url
+                      if '/assets/index-' in response.url and response.url.endswith('.js'):
+                          index_js_url = response.url
+
+                  page.on('response', handle_response)
 
                   try:
-                      print("🌐 Navegando até o site...")
-                      await page.goto(TARGET_URL, wait_until='domcontentloaded', timeout=90000)
-                      await asyncio.sleep(15) 
-                      
-                      aes_key = ""
-                      xtoon = "manual_verify"
+                      print("🏠 Acessando home...")
+                      await page.goto('https://toonlivre.net', wait_until='networkidle', timeout=30000)
+                  except Exception:
+                      pass
 
-                      # Localiza o script do bundle assets/index
-                      scripts = await page.evaluate("() => Array.from(document.querySelectorAll('script')).map(s => s.src)")
-                      for src in scripts:
-                          if 'assets/index-' in src:
-                              # Corrigimos a URL do script para usar o Host correto via IP
-                              js_url = src.replace('toonlivre.net', IP_SITE)
-                              print(f"🔎 Lendo bundle: {js_url}")
-                              
-                              try:
-                                  js_resp = await page.request.get(js_url, headers={'Host': 'toonlivre.net'})
-                                  js_text = await js_resp.text()
-                                  
-                                  # Regex para capturar a senha AES dinâmica
-                                  k = re.search(r'([A-Z][a-z]+-[A-Z][a-z]+-[A-Z][a-z]+[a-f0-9]+)', js_text)
-                                  x = re.search(r'x-toon-verify":"([^"]+)"', js_text)
-                                  
-                                  if k:
-                                      aes_key = k.group(1)
-                                      print(f"✅ Senha encontrada: {aes_key}")
-                                  if x:
-                                      xtoon = x.group(1)
+                  try:
+                      print("📖 Acessando capítulo...")
+                      await page.goto(CHAPTER_URL, wait_until='domcontentloaded', timeout=60000)
+
+                      print("⏳ Aguardando tl_cpass...")
+                      tl_cpass = None
+                      for i in range(30):
+                          cookies = await context.cookies()
+                          for c in cookies:
+                              if c['name'] == 'tl_cpass':
+                                  tl_cpass = c['value']
                                   break
-                              except Exception as e:
-                                  print(f"Erro ao ler JS: {e}")
+                          if tl_cpass:
+                              print(f"✓ tl_cpass capturado na tentativa {i+1}")
+                              break
+                          await asyncio.sleep(1)
 
-                      # Fallback caso a captura falhe
-                      if not aes_key:
-                          aes_key = "Magnesium-Strike-Astonish3393de932"
-                          print("⚠️ Usando senha de fallback.")
-
-                      # Salva o resultado
-                      with open("token.json", "w") as f:
-                          json.dump({
-                              "tl_cpass": "bypass_dns_active",
-                              "aes_key": aes_key,
-                              "x_toon_verify": xtoon,
-                              "updated_at": int(time.time())
-                          }, f, indent=2)
-                      print("✅ Arquivo token.json gerado.")
-                          
                   except Exception as e:
-                      print(f"❌ Erro na automação: {e}")
-                      sys.exit(1)
-                  finally:
-                      await browser.close()
+                      print(f"Erro: {e}")
+
+                  # Captura cf_clearance e x-toon-verify
+                  cookies = await context.cookies()
+                  cf_clearance = None
+                  tl_cpass = None
+                  for c in cookies:
+                      if c['name'] == 'cf_clearance':
+                          cf_clearance = c['value']
+                      if c['name'] == 'tl_cpass':
+                          tl_cpass = c['value']
+
+                  print(f"cf_clearance: {'✓' if cf_clearance else '❌'}")
+                  print(f"tl_cpass: {'✓' if tl_cpass else '❌'}")
+                  print(f"index.js URL: {index_js_url}")
+
+                  # Baixa o JS e extrai a senha AES e x-toon-verify
+                  aes_key = None
+                  x_toon_verify = None
+                  if index_js_url:
+                      try:
+                          js_response = await context.request.get(index_js_url)
+                          js_text = await js_response.text()
+
+                          # Extrai senha AES
+                          aes_match = re.search(r'([A-Z][a-z]+-[A-Z][a-z]+-[A-Z][a-z]+[a-f0-9]{6,})', js_text)
+                          if aes_match:
+                              aes_key = aes_match.group(1)
+                              print(f"✓ AES key: {aes_key}")
+                          else:
+                              print("❌ AES key não encontrada")
+
+                          # Extrai x-toon-verify
+                          verify_match = re.search(r'["\']x-toon-verify["\']\s*,\s*["\']([a-f0-9]+)["\']', js_text)
+                          if verify_match:
+                              x_toon_verify = verify_match.group(1)
+                              print(f"✓ X-Toon-Verify: {x_toon_verify}")
+                          else:
+                              # fallback
+                              x_toon_verify = "qedh6j2musffc129c30eqt"
+                              print(f"⚠️ X-Toon-Verify não encontrado, usando fallback: {x_toon_verify}")
+
+                      except Exception as e:
+                          print(f"Erro ao baixar JS: {e}")
+
+                  await browser.close()
+
+                  if not tl_cpass:
+                      print("❌ tl_cpass não capturado — não fazendo commit")
+                      return
+
+                  if not aes_key:
+                      print("⚠️ AES key não encontrada — usando valor atual do token.json")
+                      current = {}
+                      if os.path.exists('token.json'):
+                          with open('token.json') as f:
+                              current = json.load(f)
+                      aes_key = current.get('aes_key', '')
+
+                  # Monta o token
+                  token = {
+                      "toonlivre-pass": tl_cpass,
+                      "x-toon-verify": x_toon_verify or "qedh6j2musffc129c30eqt",
+                      "aes_key": aes_key,
+                  }
+
+                  # Compara com token atual
+                  current_token = {}
+                  if os.path.exists('token.json'):
+                      with open('token.json') as f:
+                          try:
+                              current_token = json.load(f)
+                          except:
+                              pass
+
+                  if current_token == token:
+                      print("✓ Token não mudou. Nada para atualizar.")
+                      return
+
+                  with open('token.json', 'w') as f:
+                      json.dump(token, f, indent=2)
+                  print(f"✓ Token atualizado!")
+                  print(f"  Anterior: {current_token}")
+                  print(f"  Novo: {token}")
 
           asyncio.run(main())
           EOF
 
-      - name: Commit and Push
+      - name: Commit token
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add token.json
-          git commit -m "chore: auto-update secrets $(date +'%Y-%m-%d %H:%M')"
+          git diff --staged --quiet || git commit -m "chore: update token $(date +'%Y-%m-%d %H:%M')"
           git push
